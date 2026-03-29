@@ -6,7 +6,7 @@ import {
 } from "firebase/auth";
 import {
   getFirestore, collection, doc, getDoc, getDocs, setDoc, addDoc,
-  updateDoc, deleteDoc, query, where, orderBy, onSnapshot, arrayUnion, arrayRemove,
+  updateDoc, deleteDoc, query, where, orderBy, onSnapshot, arrayUnion,
   serverTimestamp
 } from "firebase/firestore";
 
@@ -23,31 +23,35 @@ const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
 
-const LOGO_URL = "https://i.imgur.com/RkvBAAP.png";
+const LOGO_URL = "https://static.vecteezy.com/ti/vecteur-libre/p1/19997981-comedie-et-la-tragedie-theatral-masques-theatre-ou-drame-ecole-logo-conception-symbole-vectoriel.jpg";
 const DAYS = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
 
-// ─── WIKIPEDIA SEARCH ────────────────────────────────────────────────────────
-const searchWikipedia = async (title: string) => {
+// ─── WIKIPEDIA SEARCH (CORS-safe) ─────────────────────────────────────────────
+const searchWikipedia = async (title: string): Promise<any[]> => {
   try {
-    const searchRes = await fetch(`https://fr.wikipedia.org/w/api.php?action=search&list=search&srsearch=${encodeURIComponent(title + " pièce théâtre")}&format=json&origin=*&srlimit=5`);
-    const searchData = await searchRes.json();
-    return searchData.query?.search || [];
+    const url = `https://fr.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(title)}&limit=5&namespace=0&format=json&origin=*`;
+    const res = await fetch(url);
+    const data = await res.json();
+    // opensearch returns [query, [titles], [descriptions], [urls]]
+    const titles: string[] = data[1] || [];
+    const descriptions: string[] = data[2] || [];
+    return titles.map((t, i) => ({ title: t, description: descriptions[i] || "" }));
   } catch { return []; }
 };
 
-const fetchWikipediaInfo = async (pageId: number) => {
+const fetchWikipediaSummary = async (title: string): Promise<string> => {
   try {
-    const res = await fetch(`https://fr.wikipedia.org/w/api.php?action=query&prop=extracts&exintro=1&explaintext=1&pageids=${pageId}&format=json&origin=*`);
+    const url = `https://fr.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    const res = await fetch(url);
     const data = await res.json();
-    const page = data.query?.pages?.[pageId];
-    return page?.extract || "";
+    return data.extract || "";
   } catch { return ""; }
 };
 
 // ─── LOGO ─────────────────────────────────────────────────────────────────────
 const LogoMark = ({ size = 36 }: { size?: number }) => (
-  <div style={{ width:size, height:size, borderRadius:size*0.22, background:"var(--red)", display:"flex", alignItems:"center", justifyContent:"center", flexShrink:0, overflow:"hidden" }}>
-    <img src={LOGO_URL} alt="MyTheatre" style={{ width:size*0.78, height:size*0.78, objectFit:"contain", filter:"brightness(0) invert(1)" }} onError={e => { (e.currentTarget as HTMLImageElement).style.display="none"; }} />
+  <div style={{ width:size, height:size, borderRadius:size*0.2, overflow:"hidden", flexShrink:0, background:"white", display:"flex", alignItems:"center", justifyContent:"center" }}>
+    <img src={LOGO_URL} alt="MyTheatre" style={{ width:"100%", height:"100%", objectFit:"cover" }} onError={e => { (e.currentTarget as HTMLImageElement).style.display="none"; }} />
   </div>
 );
 
@@ -82,11 +86,13 @@ const CSS = `
   .heart-pop{animation:heartPop .38s cubic-bezier(.22,1,.36,1)}
   @keyframes spin{to{transform:rotate(360deg)}}
   .spin{animation:spin .8s linear infinite;display:inline-block}
+  @keyframes barGrow{from{width:0}to{width:var(--bar-w)}}
   .serif{font-family:'Libre Baskerville',Georgia,serif}
   @media(max-width:600px){
     .nav-title{display:none}
     .hero-flex{flex-direction:column!important}
     .grid-plays{grid-template-columns:repeat(auto-fill,minmax(130px,1fr))!important}
+    .stats-grid{grid-template-columns:1fr 1fr!important}
   }
 `;
 
@@ -110,7 +116,6 @@ const Ic = ({ n, s=20, c="currentColor", fill="none" }: any) => {
     clock:<><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></>,
     location:<><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></>,
     star:<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>,
-    starFill:<path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>,
     adduser:<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" y1="8" x2="19" y2="14"/><line x1="16" y1="11" x2="22" y2="11"/></>,
     chevron:<polyline points="6 9 12 15 18 9"/>,
     comment:<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>,
@@ -118,12 +123,13 @@ const Ic = ({ n, s=20, c="currentColor", fill="none" }: any) => {
     ticket:<path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/>,
     filter:<><line x1="4" y1="6" x2="20" y2="6"/><line x1="8" y1="12" x2="16" y2="12"/><line x1="11" y1="18" x2="13" y2="18"/></>,
     euro:<><circle cx="12" cy="12" r="9"/><path d="M15 9.4a4 4 0 1 0 0 5.2M8 12h6"/></>,
-    medal1:<><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></>,
-    medal2:<><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></>,
     trophy:<><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2z"/></>,
     sort:<><path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/></>,
     calendar:<><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></>,
     wiki:<><circle cx="12" cy="12" r="10"/><path d="M2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>,
+    chart:<><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></>,
+    eye:<><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+    masks:<><path d="M2 10s3-3 3-8h14c0 5 3 8 3 8"/><path d="M2 10h20"/><path d="M12 10v12"/><path d="M8 22h8"/></>,
   };
   return <svg width={s} height={s} viewBox="0 0 24 24" fill={fill} stroke={c} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">{p[n]}</svg>;
 };
@@ -182,29 +188,19 @@ const Pill = ({ children, light=false }: any) => (
 const Poster = ({ play, size=120 }: any) => {
   const h=Math.round(size*1.42);
   if(play?.posterUrl) return <img src={play.posterUrl} alt={play.title} style={{width:size,height:h,objectFit:"cover",borderRadius:"var(--r-md)",display:"block",flexShrink:0}}/>;
-  return <div style={{width:size,height:h,background:"linear-gradient(160deg,var(--red) 0%,var(--red-deeper) 100%)",borderRadius:"var(--r-md)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}><img src={LOGO_URL} alt="" style={{width:size*.45,height:size*.45,objectFit:"contain",filter:"brightness(0) invert(1)",opacity:.85}}/><div className="serif" style={{fontSize:Math.max(8,size*.088),color:"rgba(255,255,255,.82)",textAlign:"center",padding:"5px 8px",marginTop:7,lineHeight:1.3,fontStyle:"italic"}}>{play?.title}</div></div>;
+  return <div style={{width:size,height:h,background:"linear-gradient(160deg,var(--red) 0%,var(--red-deeper) 100%)",borderRadius:"var(--r-md)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",flexShrink:0}}><img src={LOGO_URL} alt="" style={{width:size*.5,height:size*.5,objectFit:"cover",opacity:.7,borderRadius:4}}/><div className="serif" style={{fontSize:Math.max(8,size*.088),color:"rgba(255,255,255,.82)",textAlign:"center",padding:"5px 8px",marginTop:7,lineHeight:1.3,fontStyle:"italic"}}>{play?.title}</div></div>;
 };
 
-// ─── DATE PICKER FOR AVAILABILITIES ──────────────────────────────────────────
+// ─── AVAILABILITY PICKER ──────────────────────────────────────────────────────
 const AvailabilityPicker = ({ value, onChange }: any) => {
-  // value: { startDate, endDate, days: string[] }
   const v = value || { startDate:"", endDate:"", days:[] };
-  const set = (k: string, val: any) => onChange({ ...v, [k]: val });
-  const toggleDay = (day: string) => {
-    const days = v.days || [];
-    set("days", days.includes(day) ? days.filter((d:string)=>d!==day) : [...days, day]);
-  };
+  const set = (k:string, val:any) => onChange({ ...v, [k]: val });
+  const toggleDay = (day:string) => { const days=v.days||[]; set("days", days.includes(day)?days.filter((d:string)=>d!==day):[...days,day]); };
   return (
     <div>
       <div style={{display:"flex",gap:10,marginBottom:10}}>
-        <div style={{flex:1}}>
-          <Lbl>Du</Lbl>
-          <input type="date" value={v.startDate} onChange={e=>set("startDate",e.target.value)} style={{fontSize:14}}/>
-        </div>
-        <div style={{flex:1}}>
-          <Lbl>Au</Lbl>
-          <input type="date" value={v.endDate} onChange={e=>set("endDate",e.target.value)} style={{fontSize:14}}/>
-        </div>
+        <div style={{flex:1}}><Lbl>Du</Lbl><input type="date" value={v.startDate} onChange={e=>set("startDate",e.target.value)} style={{fontSize:14}}/></div>
+        <div style={{flex:1}}><Lbl>Au</Lbl><input type="date" value={v.endDate} onChange={e=>set("endDate",e.target.value)} style={{fontSize:14}}/></div>
       </div>
       <Lbl>Jours de représentation</Lbl>
       <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
@@ -222,48 +218,46 @@ const AvailabilityPicker = ({ value, onChange }: any) => {
 // ─── PLAY FORM MODAL ──────────────────────────────────────────────────────────
 const PlayFormModal = ({ play, onClose, onSave, existingTitles=[] }: any) => {
   const empty: any = { title:"",playwright:"",year:"",genre:"",duration:"",cast:"",synopsis:"",theater:"",posterUrl:"",billetReducUrl:"",priceMin:"",availability:{startDate:"",endDate:"",days:[]},under26Available:false,under26Price:"",under26Conditions:"" };
-  const [form,setForm]=useState<any>(play ? {...empty,...play, availability:play.availability||{startDate:"",endDate:"",days:[]}} : empty);
+  const [form,setForm]=useState<any>(play?{...empty,...play,availability:play.availability||{startDate:"",endDate:"",days:[]}}:empty);
   const [loading,setLoading]=useState(false);
   const [step,setStep]=useState<"search"|"edit">(play?"edit":"search");
   const [titleInput,setTitleInput]=useState("");
-  const [suggestions,setSuggestions]=useState<any[]>([]);
+  const [suggestions,setSuggestions]=useState<string[]>([]);
   const [wikiResults,setWikiResults]=useState<any[]>([]);
-  const [searching,setSearching]=useState(false);
+  const [wikiLoading,setWikiLoading]=useState(false);
   const set=(k:string,v:any)=>setForm((p:any)=>({...p,[k]:v}));
 
-  // Autocomplete from existing plays
-  const handleTitleInput = (val: string) => {
+  const handleTitleInput = (val:string) => {
     setTitleInput(val);
-    if(val.length >= 2) {
-      const matches = existingTitles.filter((t:string) => t.toLowerCase().includes(val.toLowerCase()));
-      setSuggestions(matches.slice(0,5));
-    } else setSuggestions([]);
+    setWikiResults([]);
+    if(val.length>=2) setSuggestions(existingTitles.filter((t:string)=>t.toLowerCase().includes(val.toLowerCase())).slice(0,5));
+    else setSuggestions([]);
   };
 
   const handleWikiSearch = async () => {
     if(!titleInput.trim()) return toast("Entrez un titre","error");
-    setSearching(true);
+    setWikiLoading(true);
+    setSuggestions([]);
     const results = await searchWikipedia(titleInput);
     setWikiResults(results);
-    setSearching(false);
+    setWikiLoading(false);
+    if(results.length===0) toast("Aucun résultat Wikipédia. Essayez en anglais ou créez manuellement.","info");
   };
 
   const handleSelectWiki = async (result: any) => {
-    setSearching(true);
-    const extract = await fetchWikipediaInfo(result.pageid);
-    // Parse basic info from extract
-    const lines = extract.split("\n").filter((l:string)=>l.trim());
-    setForm({...empty, title:result.title.replace(/ \(.*\)/, ""), synopsis:lines.slice(0,2).join(" ").slice(0,400)});
+    setWikiLoading(true);
+    const extract = await fetchWikipediaSummary(result.title);
+    setForm({...empty, title:result.title.replace(/ \(.*\)/,""), synopsis:extract.slice(0,500)});
     setWikiResults([]);
     setStep("edit");
-    setSearching(false);
-    toast("Complétez les informations manquantes","info");
+    setWikiLoading(false);
+    toast("Synopsis récupéré. Complétez les autres infos.","info");
   };
 
   const handleSave = async () => {
     if(!form.title.trim()) return toast("Titre obligatoire","error");
     setLoading(true);
-    try { await onSave(form); onClose(); } catch(e) { toast("Erreur","error"); } finally { setLoading(false); }
+    try { await onSave(form); onClose(); } catch { toast("Erreur","error"); } finally { setLoading(false); }
   };
 
   return (
@@ -276,44 +270,40 @@ const PlayFormModal = ({ play, onClose, onSave, existingTitles=[] }: any) => {
 
         {step==="search" && !play ? (
           <div style={{padding:"0 28px 28px"}}>
-            <p style={{color:"var(--ink3)",fontSize:14,marginBottom:16}}>Tapez le titre de la pièce pour rechercher.</p>
+            <p style={{color:"var(--ink3)",fontSize:14,marginBottom:16}}>Tapez le titre pour rechercher dans la base ou sur Wikipédia.</p>
             <FRow>
               <Lbl>Titre de la pièce</Lbl>
               <div style={{position:"relative"}}>
-                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano…" autoFocus
-                  onKeyDown={e=>e.key==="Enter"&&handleWikiSearch()}/>
+                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano…" autoFocus onKeyDown={e=>e.key==="Enter"&&handleWikiSearch()}/>
                 {suggestions.length>0&&(
-                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:10,animation:"slideDown .15s ease"}}>
+                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:10}}>
+                    <div style={{padding:"8px 12px",fontSize:11,color:"var(--ink4)",fontWeight:600,textTransform:"uppercase" as const,letterSpacing:".05em",borderBottom:"1px solid var(--cream2)"}}>Dans la base</div>
                     {suggestions.map((s:string,i:number)=>(
                       <div key={i} onClick={()=>{setTitleInput(s);setSuggestions([]);setForm({...empty,title:s});setStep("edit");}}
-                        style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)"}}
+                        style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)"}}
                         onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
-                        onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
-                        {s}
-                      </div>
+                        onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>{s}</div>
                     ))}
                   </div>
                 )}
               </div>
             </FRow>
-            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:16}}>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:wikiResults.length>0?16:0}}>
               <button style={B.soft()} onClick={onClose}>Annuler</button>
-              <button style={B.soft({color:"var(--ink2)"})} onClick={handleWikiSearch} disabled={searching}>
-                <Ic n="wiki" s={15} c="var(--ink3)"/>{searching?"Recherche…":"Chercher sur Wikipédia"}
+              <button style={B.soft({color:"var(--ink2)"})} onClick={handleWikiSearch} disabled={wikiLoading}>
+                {wikiLoading?<><span className="spin">⟳</span> Recherche…</>:<><Ic n="wiki" s={15} c="var(--ink3)"/>Wikipédia</>}
               </button>
-              <button style={B.gold()} onClick={()=>{setForm({...empty,title:titleInput});setStep("edit");}}>
-                <Ic n="plus" s={15} c="#3D1F00"/>Créer manuellement
-              </button>
+              <button style={B.gold()} onClick={()=>{setForm({...empty,title:titleInput});setStep("edit");}}><Ic n="plus" s={15} c="#3D1F00"/>Manuel</button>
             </div>
             {wikiResults.length>0&&(
               <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden"}}>
-                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:12,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase",letterSpacing:".06em"}}>Résultats Wikipédia</div>
-                {wikiResults.map((r:any)=>(
-                  <div key={r.pageid} onClick={()=>handleSelectWiki(r)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)"}}
+                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em"}}>Résultats Wikipédia</div>
+                {wikiResults.map((r:any,i:number)=>(
+                  <div key={i} onClick={()=>handleSelectWiki(r)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)"}}
                     onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
                     onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
                     <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>{r.title}</div>
-                    <div style={{fontSize:12,color:"var(--ink4)"}} dangerouslySetInnerHTML={{__html:r.snippet?.replace(/<[^>]*>/g,"")||""}}/>
+                    {r.description&&<div style={{fontSize:12,color:"var(--ink4)"}}>{r.description.slice(0,100)}…</div>}
                   </div>
                 ))}
               </div>
@@ -328,13 +318,10 @@ const PlayFormModal = ({ play, onClose, onSave, existingTitles=[] }: any) => {
             <FRow><Lbl>Théâtre</Lbl><input value={form.theater} onChange={e=>set("theater",e.target.value)}/></FRow>
             <FRow><Lbl>Genre</Lbl><input value={form.genre} onChange={e=>set("genre",e.target.value)}/></FRow>
             <FRow><Lbl>Durée</Lbl><input value={form.duration} onChange={e=>set("duration",e.target.value)} placeholder="Ex: 2h30"/></FRow>
-            <FRow><Lbl>Année de création</Lbl><input value={form.year} onChange={e=>set("year",e.target.value)}/></FRow>
+            <FRow><Lbl>Année</Lbl><input value={form.year} onChange={e=>set("year",e.target.value)}/></FRow>
             <FRow><Lbl>Comédiens</Lbl><input value={form.cast} onChange={e=>set("cast",e.target.value)} placeholder="Séparés par des virgules"/></FRow>
             <FRow><Lbl>Prix minimum (€)</Lbl><input value={form.priceMin} onChange={e=>set("priceMin",e.target.value)} placeholder="Ex: 15" type="number"/></FRow>
-            <FRow>
-              <Lbl>Période de représentation</Lbl>
-              <AvailabilityPicker value={form.availability} onChange={(v:any)=>set("availability",v)}/>
-            </FRow>
+            <FRow><Lbl>Période de représentation</Lbl><AvailabilityPicker value={form.availability} onChange={(v:any)=>set("availability",v)}/></FRow>
             <FRow>
               <div style={{display:"flex",alignItems:"center",gap:10}}>
                 <input type="checkbox" id="u26" checked={form.under26Available} onChange={e=>set("under26Available",e.target.checked)} style={{width:18,height:18,accentColor:"var(--red)",flexShrink:0}}/>
@@ -342,7 +329,7 @@ const PlayFormModal = ({ play, onClose, onSave, existingTitles=[] }: any) => {
               </div>
             </FRow>
             {form.under26Available&&<>
-              <FRow><Lbl>Prix moins de 26 ans (€)</Lbl><input value={form.under26Price} onChange={e=>set("under26Price",e.target.value)} placeholder="Ex: 10" type="number"/></FRow>
+              <FRow><Lbl>Prix — 26 ans (€)</Lbl><input value={form.under26Price} onChange={e=>set("under26Price",e.target.value)} placeholder="Ex: 10" type="number"/></FRow>
               <FRow><Lbl>Conditions</Lbl><textarea value={form.under26Conditions} onChange={e=>set("under26Conditions",e.target.value)} rows={2} placeholder="Ex: Sur présentation d'une pièce d'identité"/></FRow>
             </>}
             <FRow><Lbl>Lien BilletRéduc</Lbl><input value={form.billetReducUrl} onChange={e=>set("billetReducUrl",e.target.value)} placeholder="https://www.billetreduc.com/…"/></FRow>
@@ -448,40 +435,115 @@ const HeartButton = ({ playId, playTitle, playPlaywright, currentUser, userProfi
   return <button onClick={toggle} disabled={loading} className={animating?"heart-pop":""} style={{width:44,height:44,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:inWishlist?"rgba(185,28,28,.08)":"var(--cream2)",border:`1.5px solid ${inWishlist?"var(--red)":"var(--border)"}`,transition:"all .2s",flexShrink:0}}><Ic n="heart" s={20} c={inWishlist?"var(--red)":"var(--ink4)"} fill={inWishlist?"var(--red)":"none"}/></button>;
 };
 
-// ─── DELETE WITH CLEANUP ───────────────────────────────────────────────────────
-const deletePlayWithCleanup = async (playId: string) => {
-  const reviewsSnap = await getDocs(query(collection(db,"reviews"),where("playId","==",playId)));
+// ─── DELETE WITH CLEANUP ──────────────────────────────────────────────────────
+const deletePlayWithCleanup = async (playId:string) => {
+  const reviewsSnap=await getDocs(query(collection(db,"reviews"),where("playId","==",playId)));
   for(const r of reviewsSnap.docs){
-    const commentsSnap = await getDocs(query(collection(db,"reviewComments"),where("reviewId","==",r.id)));
-    for(const c of commentsSnap.docs) await deleteDoc(doc(db,"reviewComments",c.id));
+    const cs=await getDocs(query(collection(db,"reviewComments"),where("reviewId","==",r.id)));
+    for(const c of cs.docs) await deleteDoc(doc(db,"reviewComments",c.id));
     await deleteDoc(doc(db,"reviews",r.id));
   }
   await deleteDoc(doc(db,"plays",playId));
 };
 
-// ─── IS AVAILABLE TODAY ────────────────────────────────────────────────────────
-const isAvailableToday = (play: any) => {
-  if(!play?.availability) return false;
-  const { startDate, endDate, days } = play.availability;
-  if(!startDate||!endDate||!days?.length) return false;
-  const today = new Date();
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if(today < start || today > end) return false;
-  const dayIndex = today.getDay()===0?6:today.getDay()-1;
-  return days.includes(DAYS[dayIndex]);
+// ─── AVAILABILITY HELPERS ─────────────────────────────────────────────────────
+const isAvailableToday = (play:any) => {
+  if(!play?.availability?.startDate) return false;
+  const {startDate,endDate,days}=play.availability;
+  const today=new Date(); const s=new Date(startDate); const e=new Date(endDate);
+  if(today<s||today>e) return false;
+  return days?.includes(DAYS[today.getDay()===0?6:today.getDay()-1]);
+};
+const isAvailableOnDate = (play:any, dateStr:string) => {
+  if(!play?.availability?.startDate||!dateStr) return false;
+  const {startDate,endDate,days}=play.availability;
+  const d=new Date(dateStr); const s=new Date(startDate); const e=new Date(endDate);
+  if(d<s||d>e) return false;
+  return days?.includes(DAYS[d.getDay()===0?6:d.getDay()-1]);
 };
 
-const isAvailableOnDate = (play: any, dateStr: string) => {
-  if(!play?.availability) return false;
-  const { startDate, endDate, days } = play.availability;
-  if(!startDate||!endDate||!days?.length) return false;
-  const d = new Date(dateStr);
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  if(d < start || d > end) return false;
-  const dayIndex = d.getDay()===0?6:d.getDay()-1;
-  return days.includes(DAYS[dayIndex]);
+// ─── STATS SECTION ────────────────────────────────────────────────────────────
+const ProfileStats = ({ reviews, playsMap }: any) => {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  const allSeen = reviews.filter((r:any) => r.status === "vu");
+  const monthSeen = allSeen.filter((r:any) => r.createdAt?.toDate && r.createdAt.toDate() >= monthStart);
+
+  // Best of month
+  const bestMonth = monthSeen.length > 0 ? monthSeen.reduce((a:any,b:any) => b.rating > a.rating ? b : a) : null;
+
+  // Genre le plus vu (all time)
+  const genreCount: any = {};
+  allSeen.forEach((r:any) => { const play=playsMap[r.playId]; if(play?.genre){genreCount[play.genre]=(genreCount[play.genre]||0)+1;} });
+  const topGenre = Object.entries(genreCount).sort((a:any,b:any)=>b[1]-a[1])[0];
+
+  // Théâtre le plus visité
+  const theaterCount: any = {};
+  allSeen.forEach((r:any) => { const play=playsMap[r.playId]; if(play?.theater){theaterCount[play.theater]=(theaterCount[play.theater]||0)+1;} });
+  const topTheater = Object.entries(theaterCount).sort((a:any,b:any)=>b[1]-a[1])[0];
+
+  // Note moyenne
+  const avgRating = allSeen.length > 0 ? (allSeen.reduce((a:number,r:any)=>a+r.rating,0)/allSeen.length).toFixed(1) : null;
+
+  // Progress bar for genres
+  const maxGenreCount = topGenre ? (topGenre[1] as number) : 1;
+  const topGenres = Object.entries(genreCount).sort((a:any,b:any)=>b[1]-a[1]).slice(0,3);
+
+  if(allSeen.length === 0) return null;
+
+  return (
+    <div style={{marginBottom:32}}>
+      <h3 className="serif" style={{fontSize:18,marginBottom:16,display:"flex",alignItems:"center",gap:8}}><Ic n="chart" s={18} c="var(--red)"/>Mes statistiques</h3>
+
+      {/* Main stats */}
+      <div className="stats-grid" style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:12,marginBottom:16}}>
+        {[
+          {label:"Ce mois", value:monthSeen.length, sub:"pièces vues", icon:"eye"},
+          {label:"Au total", value:allSeen.length, sub:"pièces vues", icon:"catalogue"},
+          {label:"Note moyenne", value:avgRating ? `${avgRating}★` : "—", sub:"sur 5", icon:"star"},
+          {label:"Pièce du mois", value:bestMonth?.playTitle?.split(" ").slice(0,2).join(" ")||"—", sub:bestMonth?`${bestMonth.rating}★`:"", icon:"trophy"},
+        ].map((s:any,i:number)=>(
+          <div key={i} style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:"14px 12px",textAlign:"center",boxShadow:"var(--shadow-sm)"}}>
+            <div style={{width:32,height:32,borderRadius:"50%",background:"rgba(185,28,28,.08)",display:"flex",alignItems:"center",justifyContent:"center",margin:"0 auto 8px"}}><Ic n={s.icon} s={16} c="var(--red)"/></div>
+            <div style={{fontFamily:"Libre Baskerville,serif",fontWeight:700,fontSize:16,color:"var(--ink)",marginBottom:2}}>{s.value}</div>
+            <div style={{fontSize:11,color:"var(--ink4)",fontWeight:600,textTransform:"uppercase" as const,letterSpacing:".05em"}}>{s.label}</div>
+            {s.sub&&<div style={{fontSize:11,color:"var(--ink4)",marginTop:2}}>{s.sub}</div>}
+          </div>
+        ))}
+      </div>
+
+      {/* Genre bars */}
+      {topGenres.length>0&&(
+        <div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:16,marginBottom:12,boxShadow:"var(--shadow-sm)"}}>
+          <div style={{fontSize:12,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:12}}>Genres favoris</div>
+          {topGenres.map(([genre,count]:any,i:number)=>(
+            <div key={i} style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:13,color:"var(--ink2)"}}>{genre}</span>
+                <span style={{fontSize:12,color:"var(--ink4)",fontWeight:600}}>{count} pièce{count>1?"s":""}</span>
+              </div>
+              <div style={{height:6,background:"var(--cream2)",borderRadius:3,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${(count/maxGenreCount)*100}%`,background:"linear-gradient(90deg,var(--red),var(--red-dark))",borderRadius:3,transition:"width .6s ease"}}/>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Top theater */}
+      {topTheater&&(
+        <div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:14,display:"flex",alignItems:"center",gap:12,boxShadow:"var(--shadow-sm)"}}>
+          <div style={{width:40,height:40,borderRadius:"50%",background:"rgba(201,168,76,.12)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="location" s={18} c="var(--gold)"/></div>
+          <div>
+            <div style={{fontSize:11,fontWeight:600,color:"var(--ink4)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:2}}>Théâtre favori</div>
+            <div style={{fontFamily:"Libre Baskerville,serif",fontWeight:700,fontSize:15,color:"var(--ink)"}}>{topTheater[0]}</div>
+            <div style={{fontSize:12,color:"var(--ink4)"}}>{topTheater[1] as number} visite{(topTheater[1] as number)>1?"s":""}</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };
 
 // ─── PLAY DETAIL ──────────────────────────────────────────────────────────────
@@ -513,8 +575,7 @@ const PlayDetail = ({ playId, currentUser, userProfile, onBack }: any) => {
   if(loading)return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"60vh",color:"var(--ink4)"}}>Chargement…</div>;
   if(!play)return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"60vh",color:"var(--ink4)"}}>Pièce introuvable.</div>;
 
-  const availToday = isAvailableToday(play);
-  const avail = play.availability;
+  const avail=play.availability;
 
   return(
     <div className="fade" style={{minHeight:"100vh",background:"var(--cream)"}}>
@@ -530,29 +591,22 @@ const PlayDetail = ({ playId, currentUser, userProfile, onBack }: any) => {
                 {play.genre&&<Pill light>{play.genre}</Pill>}
                 {play.duration&&<Pill light><Ic n="clock" s={12} c="rgba(255,255,255,.7)"/>{play.duration}</Pill>}
                 {play.theater&&<Pill light><Ic n="location" s={12} c="rgba(255,255,255,.7)"/>{play.theater}</Pill>}
-                {availToday&&<span style={{background:"rgba(46,160,67,.3)",border:"1px solid rgba(46,160,67,.6)",color:"#7fff9a",padding:"4px 12px",borderRadius:100,fontSize:12,fontWeight:600}}>Disponible ce soir</span>}
+                {isAvailableToday(play)&&<span style={{background:"rgba(46,160,67,.3)",border:"1px solid rgba(46,160,67,.6)",color:"#7fff9a",padding:"4px 12px",borderRadius:100,fontSize:12,fontWeight:600}}>Disponible ce soir</span>}
               </div>
               {avg&&<div style={{display:"inline-flex",alignItems:"center",gap:10,background:"rgba(0,0,0,.2)",padding:"8px 16px",borderRadius:100,marginBottom:16}}><Stars value={Math.round(Number(avg))} onChange={()=>{}} readonly size={16}/><span style={{color:"var(--gold-light)",fontWeight:700,fontSize:17}}>{avg}</span><span style={{color:"rgba(255,255,255,.5)",fontSize:13}}>/ 5 · {reviews.length} avis</span></div>}
-
-              {/* Prix */}
-              <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:avail?.startDate?16:0}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:10,marginBottom:avail?.startDate?16:8}}>
                 {play.priceMin&&<div style={{background:"rgba(0,0,0,.2)",padding:"8px 14px",borderRadius:10,display:"flex",alignItems:"center",gap:6}}><Ic n="euro" s={14} c="var(--gold-light)"/><span style={{color:"white",fontSize:14}}>À partir de <b style={{color:"var(--gold-light)"}}>{play.priceMin}€</b></span></div>}
                 {play.under26Available&&<div style={{background:"rgba(201,168,76,.15)",border:"1px solid rgba(201,168,76,.4)",padding:"8px 14px",borderRadius:10}}><span style={{color:"var(--gold-light)",fontSize:13,fontWeight:600}}>— 26 ans : {play.under26Price}€</span>{play.under26Conditions&&<p style={{color:"rgba(255,255,255,.6)",fontSize:11,marginTop:3}}>{play.under26Conditions}</p>}</div>}
               </div>
-
-              {/* Disponibilités */}
               {avail?.startDate&&<div style={{marginBottom:16,background:"rgba(0,0,0,.15)",padding:"10px 14px",borderRadius:10}}>
                 <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}><Ic n="calendar" s={14} c="var(--gold-light)"/><span style={{color:"rgba(255,255,255,.7)",fontSize:12}}>Du <b style={{color:"white"}}>{new Date(avail.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"long"})}</b> au <b style={{color:"white"}}>{new Date(avail.endDate).toLocaleDateString("fr-FR",{day:"numeric",month:"long"})}</b></span></div>
-                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                  {DAYS.map(d=><span key={d} style={{padding:"3px 9px",borderRadius:100,fontSize:11,fontWeight:500,background:avail.days?.includes(d)?"rgba(255,255,255,.25)":"rgba(255,255,255,.07)",color:avail.days?.includes(d)?"white":"rgba(255,255,255,.3)",border:`1px solid ${avail.days?.includes(d)?"rgba(255,255,255,.4)":"transparent"}`}}>{d.slice(0,3)}</span>)}
-                </div>
+                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>{DAYS.map(d=><span key={d} style={{padding:"3px 9px",borderRadius:100,fontSize:11,fontWeight:500,background:avail.days?.includes(d)?"rgba(255,255,255,.25)":"rgba(255,255,255,.07)",color:avail.days?.includes(d)?"white":"rgba(255,255,255,.3)",border:`1px solid ${avail.days?.includes(d)?"rgba(255,255,255,.4)":"transparent"}`}}>{d.slice(0,3)}</span>)}</div>
               </div>}
-
               <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
                 {currentUser&&<HeartButton playId={playId} playTitle={play.title} playPlaywright={play.playwright} currentUser={currentUser} userProfile={userProfile}/>}
                 {currentUser&&<button style={B.gold({fontSize:13})} onClick={()=>setShowReview(true)}><Ic n="star" s={14} c="#3D1F00" fill="#3D1F00"/>{myReview?"Modifier mon avis":"Donner mon avis"}</button>}
                 {play.billetReducUrl&&<a href={play.billetReducUrl} target="_blank" rel="noopener noreferrer" style={{...B.soft({fontSize:13,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:100,textDecoration:"none"})}}><Ic n="ticket" s={14} c="white"/>BilletRéduc</a>}
-                {currentUser&&myReview&&<button style={B.ghost({fontSize:13,color:"rgba(255,255,255,.7)",borderColor:"rgba(255,255,255,.3)"})} onClick={deleteReview}><Ic n="trash" s={14} c="rgba(255,255,255,.7)"/>Supprimer mon avis</button>}
+                {currentUser&&myReview&&<button style={B.ghost({fontSize:13,color:"rgba(255,255,255,.7)",borderColor:"rgba(255,255,255,.3)"})} onClick={deleteReview}><Ic n="trash" s={14} c="rgba(255,255,255,.7)"/>Supprimer</button>}
               </div>
               {currentUser&&<div style={{display:"flex",gap:8,marginTop:10}}>
                 <button style={{fontSize:12,color:"rgba(255,255,255,.5)",background:"transparent",textDecoration:"underline"}} onClick={()=>setShowEdit(true)}>Modifier</button>
@@ -605,7 +659,7 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
   const seeded=useRef(false);
 
   useEffect(()=>{
-    const unsub=onSnapshot(collection(db,"plays"),snap=>{const data=snap.docs.map(d=>({id:d.id,...d.data()}));setPlays(data);setLoading(false);if(data.length===0&&!seeded.current){seeded.current=true;}});
+    const unsub=onSnapshot(collection(db,"plays"),snap=>{const data=snap.docs.map(d=>({id:d.id,...d.data()}));setPlays(data);setLoading(false);});
     return unsub;
   },[]);
   useEffect(()=>{
@@ -613,24 +667,26 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
     return unsub;
   },[]);
 
-  const handleSearch = (val: string) => {
-    setSearch(val);
-    if(val.length>=2) setSuggestions(plays.filter(p=>p.title?.toLowerCase().includes(val.toLowerCase())).map(p=>p.title).slice(0,5));
-    else setSuggestions([]);
-  };
-
+  const handleSearch=(val:string)=>{setSearch(val);if(val.length>=2)setSuggestions(plays.filter(p=>p.title?.toLowerCase().includes(val.toLowerCase())).map(p=>p.title).slice(0,5));else setSuggestions([]);};
   const seenPlayIds=new Set((userReviews||[]).filter((r:any)=>r.status==="vu").map((r:any)=>r.playId));
   let filtered=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(search.toLowerCase())));
-  if(filterDate) filtered=filtered.filter(p=>isAvailableOnDate(p,filterDate));
-  if(filterUnder26) filtered=filtered.filter(p=>p.under26Available);
-  if(filterNotSeen&&currentUser) filtered=filtered.filter(p=>!seenPlayIds.has(p.id));
+  if(filterDate)filtered=filtered.filter(p=>isAvailableOnDate(p,filterDate));
+  if(filterUnder26)filtered=filtered.filter(p=>p.under26Available);
+  if(filterNotSeen&&currentUser)filtered=filtered.filter(p=>!seenPlayIds.has(p.id));
   filtered=[...filtered].sort((a,b)=>{
-    if(sortBy==="rating")return (parseFloat(avgMap[b.id])||0)-(parseFloat(avgMap[a.id])||0);
-    if(sortBy==="price")return (parseFloat(a.priceMin)||9999)-(parseFloat(b.priceMin)||9999);
-    return (a.title||"").localeCompare(b.title||"");
+    if(sortBy==="rating")return(parseFloat(avgMap[b.id])||0)-(parseFloat(avgMap[a.id])||0);
+    if(sortBy==="price")return(parseFloat(a.priceMin)||9999)-(parseFloat(b.priceMin)||9999);
+    return(a.title||"").localeCompare(b.title||"");
   });
 
-  const allTitles = plays.map(p=>p.title).filter(Boolean);
+  const CheckboxFilter = ({ label, checked, onChange }: any) => (
+    <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",userSelect:"none" as const}}>
+      <div style={{width:20,height:20,borderRadius:5,border:`2px solid ${checked?"var(--gold)":"rgba(255,255,255,.4)"}`,background:checked?"var(--gold)":"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all .15s",flexShrink:0}} onClick={()=>onChange(!checked)}>
+        {checked&&<svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="#3D1F00" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+      </div>
+      <span style={{color:"rgba(255,255,255,.85)",fontSize:13}}>{label}</span>
+    </label>
+  );
 
   return(
     <div style={{minHeight:"100vh",background:"var(--cream)"}}>
@@ -645,7 +701,7 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
               <div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}><Ic n="search" s={16} c="rgba(255,255,255,.5)"/></div>
               <input value={search} onChange={e=>handleSearch(e.target.value)} placeholder="Titre, auteur, genre…" style={{paddingLeft:42,background:"rgba(255,255,255,.12)",border:"1.5px solid rgba(255,255,255,.2)",color:"white",borderRadius:100}}/>
               {suggestions.length>0&&(
-                <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:100,animation:"slideDown .15s ease"}}>
+                <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:100}}>
                   {suggestions.map((s:string,i:number)=>(
                     <div key={i} onClick={()=>{setSearch(s);setSuggestions([]);}} style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)"}}
                       onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
@@ -654,35 +710,36 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
                 </div>
               )}
             </div>
-            <button style={{...B.soft({fontSize:13,background:showFilters?"rgba(201,168,76,.3)":"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",color:"white",borderRadius:100})}} onClick={()=>setShowFilters(p=>!p)}>
-              <Ic n="filter" s={15} c="white"/>Filtres
+            <button style={{...B.soft({fontSize:13,background:showFilters?"rgba(201,168,76,.25)":"rgba(255,255,255,.15)",border:`1px solid ${showFilters?"rgba(201,168,76,.5)":"rgba(255,255,255,.25)"}`,color:"white",borderRadius:100})}} onClick={()=>setShowFilters(p=>!p)}>
+              <Ic n="filter" s={15} c="white"/>Filtres{(filterDate||filterUnder26||filterNotSeen)&&<span style={{background:"var(--gold)",color:"#3D1F00",width:16,height:16,borderRadius:"50%",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{[filterDate,filterUnder26,filterNotSeen].filter(Boolean).length}</span>}
             </button>
           </div>
+
           {showFilters&&(
-            <div style={{background:"rgba(0,0,0,.2)",borderRadius:"var(--r-lg)",padding:16,marginTop:12,animation:"slideDown .2s ease"}}>
-              <div style={{display:"flex",flexWrap:"wrap",gap:20,alignItems:"flex-start"}}>
+            <div style={{background:"rgba(0,0,0,.25)",borderRadius:"var(--r-lg)",padding:18,marginTop:12,animation:"slideDown .2s ease"}}>
+              <div style={{display:"flex",flexWrap:"wrap",gap:24,alignItems:"flex-start"}}>
+                {/* Sort */}
                 <div>
-                  <p style={{color:"rgba(255,255,255,.7)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Trier par</p>
+                  <p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Trier par</p>
                   <div style={{display:"flex",gap:6}}>
-                    {[["title","A-Z"],["rating","Note"],["price","Prix"]].map(([v,l])=>(
-                      <button key={v} onClick={()=>setSortBy(v)} style={{padding:"5px 12px",borderRadius:100,fontSize:12,fontWeight:500,background:sortBy===v?"white":"transparent",color:sortBy===v?"var(--red)":"rgba(255,255,255,.7)",border:`1px solid ${sortBy===v?"white":"rgba(255,255,255,.3)"}`,transition:"all .15s"}}>{l}</button>
+                    {[["title","A–Z"],["rating","Note"],["price","Prix"]].map(([v,l])=>(
+                      <button key={v} onClick={()=>setSortBy(v)} style={{padding:"6px 14px",borderRadius:100,fontSize:12,fontWeight:500,background:sortBy===v?"white":"transparent",color:sortBy===v?"var(--red)":"rgba(255,255,255,.7)",border:`1px solid ${sortBy===v?"white":"rgba(255,255,255,.3)"}`,transition:"all .15s"}}>{l}</button>
                     ))}
                   </div>
                 </div>
+                {/* Date filter */}
                 <div>
-                  <p style={{color:"rgba(255,255,255,.7)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Disponible le</p>
-                  <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:"var(--r-sm)",padding:"6px 10px",fontSize:13,width:"auto"}}/>
-                  {filterDate&&<button onClick={()=>setFilterDate("")} style={{background:"transparent",color:"rgba(255,255,255,.5)",fontSize:12,marginLeft:8,textDecoration:"underline"}}>Effacer</button>}
+                  <p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Disponible le</p>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:"var(--r-sm)",padding:"7px 10px",fontSize:13,width:"auto"}}/>
+                    {filterDate&&<button onClick={()=>setFilterDate("")} style={{background:"transparent",color:"rgba(255,255,255,.5)",fontSize:12,textDecoration:"underline"}}>Effacer</button>}
+                  </div>
                 </div>
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  <label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-                    <input type="checkbox" checked={filterUnder26} onChange={e=>setFilterUnder26(e.target.checked)} style={{accentColor:"var(--gold)"}}/>
-                    <span style={{color:"rgba(255,255,255,.8)",fontSize:13}}>Tarif — 26 ans</span>
-                  </label>
-                  {currentUser&&<label style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
-                    <input type="checkbox" checked={filterNotSeen} onChange={e=>setFilterNotSeen(e.target.checked)} style={{accentColor:"var(--gold)"}}/>
-                    <span style={{color:"rgba(255,255,255,.8)",fontSize:13}}>Pas encore vues</span>
-                  </label>}
+                {/* Checkboxes */}
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:0}}>Filtres</p>
+                  <CheckboxFilter label="Offre moins de 26 ans" checked={filterUnder26} onChange={setFilterUnder26}/>
+                  {currentUser&&<CheckboxFilter label="Pas encore vues" checked={filterNotSeen} onChange={setFilterNotSeen}/>}
                 </div>
               </div>
             </div>
@@ -698,7 +755,7 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
                 <div style={{position:"relative"}}>
                   <Poster play={play} size={160}/>
                   {isAvailableToday(play)&&<span style={{position:"absolute",top:8,left:8,background:"rgba(46,160,67,.9)",color:"white",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>Ce soir</span>}
-                  {play.under26Available&&<span style={{position:"absolute",top:8,right:8,background:"rgba(201,168,76,.9)",color:"#3D1F00",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>-26ans</span>}
+                  {play.under26Available&&<span style={{position:"absolute",top:8,right:8,background:"rgba(201,168,76,.9)",color:"#3D1F00",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>−26ans</span>}
                 </div>
                 <div style={{padding:"12px 14px 14px"}}>
                   <div className="serif" style={{fontWeight:700,fontSize:13,lineHeight:1.35,marginBottom:3}}>{play.title}</div>
@@ -710,7 +767,7 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
             ))}
           </div>}
       </div>
-      {showAdd&&<PlayFormModal existingTitles={allTitles} onClose={()=>setShowAdd(false)} onSave={async(form:any)=>{await addDoc(collection(db,"plays"),{...form,createdAt:serverTimestamp()});toast("Pièce ajoutée !","success");}}/>}
+      {showAdd&&<PlayFormModal existingTitles={plays.map(p=>p.title).filter(Boolean)} onClose={()=>setShowAdd(false)} onSave={async(form:any)=>{await addDoc(collection(db,"plays"),{...form,createdAt:serverTimestamp()});toast("Pièce ajoutée !","success");}}/>}
     </div>
   );
 };
@@ -731,12 +788,7 @@ const RankingPage = ({ onSelectPlay }: any) => {
     return unsub;
   },[]);
 
-  const rankIcons = [
-    <svg key={1} width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#C9A84C" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>,
-    <svg key={2} width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#9B9B9B" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>,
-    <svg key={3} width={28} height={28} viewBox="0 0 24 24" fill="none" stroke="#CD7F32" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>,
-  ];
-
+  const medalColors=["#C9A84C","#9B9B9B","#CD7F32"];
   return(
     <div style={{minHeight:"100vh",background:"var(--cream)"}}>
       <div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}>
@@ -746,24 +798,23 @@ const RankingPage = ({ onSelectPlay }: any) => {
         </div>
       </div>
       <div style={{maxWidth:800,margin:"0 auto",padding:24}}>
-        {loading?<div style={{textAlign:"center",padding:60,color:"var(--ink4)"}}>Chargement…</div>
-          :ranking.length===0?<Empty icon="trophy" text="Pas encore assez d'avis cette semaine." sub="Revenez après avoir noté quelques pièces !"/>
+        {loading?<div style={{textAlign:"center",padding:60}}>Chargement…</div>
+          :ranking.length===0?<Empty icon="trophy" text="Pas encore assez d'avis cette semaine."/>
           :<div style={{display:"flex",flexDirection:"column",gap:12}}>
             {ranking.map((item:any,i:number)=>(
               <Card key={item.playId} hover onClick={()=>onSelectPlay(item.playId)} style={{padding:0,overflow:"hidden"}}>
                 <div style={{display:"flex",alignItems:"center"}}>
-                  <div style={{width:60,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",background:i<3?"linear-gradient(135deg,var(--cream2),var(--cream))":"var(--cream2)",minHeight:80}}>
-                    {i<3?rankIcons[i]:<span style={{fontWeight:700,fontSize:18,color:"var(--ink4)"}}>#{i+1}</span>}
+                  <div style={{width:56,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",minHeight:80,background:"var(--cream2)"}}>
+                    {i<3
+                      ? <svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={medalColors[i]} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>
+                      : <span style={{fontWeight:700,fontSize:17,color:"var(--ink4)"}}>#{i+1}</span>
+                    }
                   </div>
-                  {item.play&&<div style={{flexShrink:0}}><Poster play={item.play} size={56}/></div>}
+                  {item.play&&<div style={{flexShrink:0}}><Poster play={item.play} size={52}/></div>}
                   <div style={{flex:1,padding:"14px 16px"}}>
                     <div className="serif" style={{fontWeight:700,fontSize:15,marginBottom:3}}>{item.playTitle}</div>
                     <div style={{color:"var(--ink4)",fontSize:12,marginBottom:6}}>{item.playPlaywright}</div>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <Stars value={Math.round(item.avg)} onChange={()=>{}} readonly size={14}/>
-                      <span style={{fontWeight:700,color:"var(--red)",fontSize:14}}>{item.avg.toFixed(1)}</span>
-                      <span style={{color:"var(--ink4)",fontSize:12}}>({item.count} avis)</span>
-                    </div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}><Stars value={Math.round(item.avg)} onChange={()=>{}} readonly size={14}/><span style={{fontWeight:700,color:"var(--red)",fontSize:14}}>{item.avg.toFixed(1)}</span><span style={{color:"var(--ink4)",fontSize:12}}>({item.count} avis)</span></div>
                   </div>
                 </div>
               </Card>
@@ -786,10 +837,7 @@ const WishlistPage = ({ currentUser, onSelectPlay }: any) => {
   return(
     <div style={{minHeight:"100vh",background:"var(--cream)"}}>
       <div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}>
-        <div style={{maxWidth:800,margin:"0 auto"}}>
-          <h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Wishlist</h1>
-          <p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Les pièces que vous souhaitez voir</p>
-        </div>
+        <div style={{maxWidth:800,margin:"0 auto"}}><h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Wishlist</h1><p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Les pièces que vous souhaitez voir</p></div>
       </div>
       <div style={{maxWidth:800,margin:"0 auto",padding:24}}>
         {!currentUser?<Empty icon="wishlist" text="Connectez-vous pour voir votre wishlist."/>
@@ -827,11 +875,8 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
     const u2=onSnapshot(query(collection(db,"reviews"),where("userId","==",uid),where("status","==","vu"),orderBy("createdAt","desc")),async s=>{
       const revs=s.docs.map(d=>({id:d.id,...d.data()}));
       setReviews(revs);
-      // Fetch play details for grid display
       const pm:any={};
-      await Promise.all(revs.map(async(r:any)=>{
-        if(!pm[r.playId]){try{const ps=await getDoc(doc(db,"plays",r.playId));if(ps.exists())pm[r.playId]={id:ps.id,...ps.data()};}catch{}}
-      }));
+      await Promise.all(revs.map(async(r:any)=>{if(!pm[r.playId]){try{const ps=await getDoc(doc(db,"plays",r.playId));if(ps.exists())pm[r.playId]={id:ps.id,...ps.data()};}catch{}}}));
       setPlaysMap(pm);
     });
     return()=>{u1();u2();};
@@ -863,11 +908,10 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
     await updateDoc(doc(db,"users",currentUser.uid),{favoritePlayIds:newFavs});
   };
 
-  // Sort reviews
   const sortedReviews=[...reviews].sort((a:any,b:any)=>{
     if(sortReviews==="rating-desc")return b.rating-a.rating;
     if(sortReviews==="rating-asc")return a.rating-b.rating;
-    return 0; // recent = default firestore order
+    return 0;
   });
 
   const favPlayIds=profile?.favoritePlayIds||[];
@@ -894,21 +938,17 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
                 :<button style={B.gold({fontSize:13})} onClick={sendFriendReq}><Ic n="adduser" s={14} c="#3D1F00"/>Ajouter en ami</button>}
             </div>
           </div>
-
-          {/* 4 pièces favorites */}
+          {/* 4 favorites */}
           <div>
-            <p style={{color:"rgba(255,255,255,.7)",fontSize:12,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:10}}>
-              {isOwn?"Mes 4 pièces préférées — cliquez ⭐ sur vos pièces vues":"Pièces préférées"}
-            </p>
+            <p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>{isOwn?"Mes 4 pièces préférées — cliquez ⭐ pour choisir":"Pièces préférées"}</p>
             <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8}}>
               {[0,1,2,3].map(i=>{
-                const r=favReviews[i];
-                const play=r?playsMap[r.playId]:null;
+                const r=favReviews[i];const play=r?playsMap[r.playId]:null;
                 return(
                   <div key={i} style={{aspectRatio:"2/3",borderRadius:"var(--r-md)",overflow:"hidden",background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",cursor:r?"pointer":"default"}} onClick={r?()=>onSelectPlay(r.playId):undefined}>
-                    {play?.posterUrl?<img src={play.posterUrl} alt={play.title} style={{width:"100%",height:"100%",objectFit:"cover"}}/>
-                      :r?<div style={{width:"100%",height:"100%",background:"linear-gradient(160deg,var(--red) 0%,var(--red-deeper) 100%)",display:"flex",alignItems:"center",justifyContent:"center"}}><div className="serif" style={{fontSize:10,color:"rgba(255,255,255,.8)",textAlign:"center",padding:"4px"}}>{r.playTitle}</div></div>
-                      :<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="plus" s={20} c="rgba(255,255,255,.3)"/></div>}
+                    {play?.posterUrl?<img src={play.posterUrl} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>
+                      :r?<div style={{width:"100%",height:"100%",background:"linear-gradient(160deg,var(--red) 0%,var(--red-deeper) 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:4}}><div className="serif" style={{fontSize:10,color:"rgba(255,255,255,.8)",textAlign:"center"}}>{r.playTitle}</div></div>
+                      :<div style={{width:"100%",height:"100%",display:"flex",alignItems:"center",justifyContent:"center"}}><Ic n="plus" s={20} c="rgba(255,255,255,.25)"/></div>}
                   </div>
                 );
               })}
@@ -918,6 +958,7 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
       </div>
 
       <div style={{maxWidth:820,margin:"0 auto",padding:"28px 24px"}}>
+        {/* Demandes d'amis */}
         {isOwn&&friendReqs.length>0&&(
           <div style={{marginBottom:28}}>
             <h3 className="serif" style={{fontSize:16,marginBottom:14}}>Demandes d'amis ({friendReqs.length})</h3>
@@ -934,7 +975,10 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
           </div>
         )}
 
-        {/* Pièces vues avec tri */}
+        {/* Stats */}
+        {isOwn&&<ProfileStats reviews={reviews} playsMap={playsMap}/>}
+
+        {/* Pièces vues */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:10}}>
           <h3 className="serif" style={{fontSize:18}}>Pièces vues ({reviews.length})</h3>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -946,12 +990,10 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
             </select>
           </div>
         </div>
-
         {reviews.length===0?<Empty icon="catalogue" text="Aucune pièce vue pour l'instant."/>
           :<div className="grid-plays" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(150px,1fr))",gap:16}}>
             {sortedReviews.map((r:any)=>{
-              const play=playsMap[r.playId];
-              const isFav=favPlayIds.includes(r.playId);
+              const play=playsMap[r.playId];const isFav=favPlayIds.includes(r.playId);
               return(
                 <div key={r.id} style={{position:"relative"}}>
                   <Card hover onClick={()=>onSelectPlay(r.playId)}>
@@ -962,7 +1004,7 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
                       <Stars value={r.rating} onChange={()=>{}} readonly size={13}/>
                     </div>
                   </Card>
-                  {isOwn&&<button onClick={e=>{e.stopPropagation();toggleFavorite(r.playId);}} style={{position:"absolute",top:6,right:6,width:28,height:28,borderRadius:"50%",background:"rgba(0,0,0,.4)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
+                  {isOwn&&<button onClick={e=>{e.stopPropagation();toggleFavorite(r.playId);}} style={{position:"absolute",top:6,right:6,width:28,height:28,borderRadius:"50%",background:"rgba(0,0,0,.45)",border:"none",display:"flex",alignItems:"center",justifyContent:"center",backdropFilter:"blur(4px)"}}>
                     <Ic n="star" s={14} c={isFav?"var(--gold)":"rgba(255,255,255,.7)"} fill={isFav?"var(--gold)":"none"}/>
                   </button>}
                 </div>
@@ -1004,8 +1046,7 @@ const CommunityPage = ({ currentUser, userProfile, onSelectPlay, onSelectUser }:
   const [showNotifs,setShowNotifs]=useState(false);
   useEffect(()=>{
     if(!currentUser){setLoading(false);return;}
-    const friends=userProfile?.friends||[];
-    const uids=[currentUser.uid,...friends].slice(0,10);
+    const friends=userProfile?.friends||[];const uids=[currentUser.uid,...friends].slice(0,10);
     const unsub=onSnapshot(query(collection(db,"reviews"),where("userId","in",uids),where("status","==","vu"),orderBy("createdAt","desc")),snap=>{setReviews(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});
     return unsub;
   },[currentUser,userProfile]);
@@ -1049,9 +1090,7 @@ const CommunityPage = ({ currentUser, userProfile, onSelectPlay, onSelectUser }:
               </div>
               <button style={B.gold({flexShrink:0,fontSize:13})} onClick={searchUsers} disabled={searching}>{searching?"…":"Rechercher"}</button>
             </div>
-            {results.length>0&&<div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>
-              {results.map((u:any)=><div key={u.id} style={{background:"var(--white)",borderRadius:"var(--r-md)",padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}><Avatar user={u} size={36}/><div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{u.pseudo}</div>{u.bio&&<div style={{color:"var(--ink4)",fontSize:12}}>{u.bio}</div>}</div><button style={B.gold({fontSize:12,padding:"7px 14px"})} onClick={()=>onSelectUser(u.id)}>Voir profil</button></div>)}
-            </div>}
+            {results.length>0&&<div style={{marginTop:12,display:"flex",flexDirection:"column",gap:8}}>{results.map((u:any)=><div key={u.id} style={{background:"var(--white)",borderRadius:"var(--r-md)",padding:"12px 16px",display:"flex",alignItems:"center",gap:12}}><Avatar user={u} size={36}/><div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{u.pseudo}</div>{u.bio&&<div style={{color:"var(--ink4)",fontSize:12}}>{u.bio}</div>}</div><button style={B.gold({fontSize:12,padding:"7px 14px"})} onClick={()=>onSelectUser(u.id)}>Voir profil</button></div>)}</div>}
             {searchQ&&results.length===0&&!searching&&<p style={{color:"rgba(255,255,255,.4)",fontSize:13,marginTop:8}}>Aucun utilisateur trouvé.</p>}
           </div>
         </div>
@@ -1109,7 +1148,7 @@ const AuthPage = ({ onSuccess }: any) => {
   return(
     <div style={{minHeight:"100vh",display:"flex",background:"var(--red)"}}>
       <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:40,gap:16}}>
-        <LogoMark size={80}/>
+        <LogoMark size={90}/>
         <h1 className="serif" style={{fontSize:36,color:"white",textAlign:"center"}}>MyTheatre</h1>
         <p style={{color:"rgba(255,255,255,.6)",fontSize:15,textAlign:"center",maxWidth:260,lineHeight:1.6,fontStyle:"italic"}}>Votre journal de bord théâtral.</p>
       </div>
@@ -1146,7 +1185,7 @@ const Navbar = ({ page, setPage, currentUser, userProfile, onLogout }: any) => {
   return(
     <nav style={{background:"var(--red-deeper)",position:"sticky",top:0,zIndex:200,height:56,display:"flex",alignItems:"center",padding:"0 16px",borderBottom:"1px solid rgba(201,168,76,.3)",width:"100%"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:16,cursor:"pointer",flexShrink:0}} onClick={()=>setPage("catalogue")}>
-        <LogoMark size={28}/>
+        <LogoMark size={30}/>
         <span className="serif nav-title" style={{fontSize:16,color:"var(--gold)",fontWeight:700}}>MyTheatre</span>
       </div>
       <div style={{display:"flex",gap:2,flex:1}}>
@@ -1210,7 +1249,7 @@ export default function App() {
   const logout=async()=>{await signOut(auth);setPage("catalogue");setSelectedPlayId(null);setSelectedUserId(null);toast("À bientôt !","info");};
   const changePage=(p:string)=>{setSelectedPlayId(null);setSelectedUserId(null);setPage(p);};
 
-  if(authLoading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--red)",flexDirection:"column",gap:16}}><style>{CSS}</style><LogoMark size={72}/><div className="serif" style={{color:"var(--gold)",fontSize:24}}>MyTheatre</div><div style={{color:"rgba(255,255,255,.5)",fontSize:13}}>Chargement…</div></div>);
+  if(authLoading)return(<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"var(--red)",flexDirection:"column",gap:16}}><style>{CSS}</style><LogoMark size={80}/><div className="serif" style={{color:"var(--gold)",fontSize:24}}>MyTheatre</div><div style={{color:"rgba(255,255,255,.5)",fontSize:13}}>Chargement…</div></div>);
 
   const renderContent=()=>{
     if(selectedPlayId)return <PlayDetail playId={selectedPlayId} currentUser={currentUser} userProfile={userProfile} onBack={()=>setSelectedPlayId(null)}/>;
