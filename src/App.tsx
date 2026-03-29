@@ -25,7 +25,7 @@ const db = getFirestore(app);
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
 const DAYS = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
-const LOGO_URL = "https://i.imgur.com/RkvBAAP.png";
+const LOGO_URL = "https://static.vecteezy.com/ti/vecteur-libre/p1/19997981-comedie-et-la-tragedie-theatral-masques-theatre-ou-drame-ecole-logo-conception-symbole-vectoriel.jpg";
 
 const DEFAULT_PLAYS = [
   { title:"Phèdre", playwright:"Jean Racine", year:"1677", genre:"Tragédie", duration:"2h15", cast:"Marie Dupont, Jean-Pierre Martin", synopsis:"La passion dévastatrice de Phèdre pour son beau-fils Hippolyte.", theater:"Comédie-Française", posterUrl:"", billetReducUrl:"", priceMin:"", availableDays:[], under26Available:false, under26Price:"", under26Conditions:"" },
