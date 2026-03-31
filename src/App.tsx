@@ -121,7 +121,7 @@ const ticketmasterToPlay = (event: any) => {
 // ─── WIKIPEDIA (fallback) ─────────────────────────────────────────────────────
 const searchWikipedia = async (title: string): Promise<any[]> => {
   try {
-    const url = `https://fr.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(title)}&limit=5&namespace=0&format=json&origin=*`;
+    const url = `https://fr.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(title)}&limit=8&namespace=0&format=json&origin=*`;
     const res = await fetch(url);
     const data = await res.json();
     const titles: string[] = data[1] || [];
@@ -129,13 +129,54 @@ const searchWikipedia = async (title: string): Promise<any[]> => {
     return titles.map((t, i) => ({ title: t, description: descriptions[i] || "" }));
   } catch { return []; }
 };
-const fetchWikipediaSummary = async (title: string): Promise<string> => {
+
+const fetchWikipediaInfo = async (title: string): Promise<{synopsis:string, author:string, posterUrl:string}> => {
   try {
-    const url = `https://fr.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
+    // Récupère le contenu complet + image
+    const url = `https://fr.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=extracts|pageimages|revisions&exintro=false&explaintext=true&piprop=original&rvprop=content&format=json&origin=*`;
     const res = await fetch(url);
     const data = await res.json();
-    return data.extract || "";
-  } catch { return ""; }
+    const pages = data.query?.pages || {};
+    const page = Object.values(pages)[0] as any;
+    if(!page) return {synopsis:"", author:"", posterUrl:""};
+
+    const extract = page.extract || "";
+    const posterUrl = page.original?.source || "";
+    const wikitext = page.revisions?.[0]?.["*"] || "";
+
+    // Extrait l'auteur depuis l'infobox Wikipedia
+    // Cherche "auteur = ", "dramaturge = ", "auteur=", "écrivain ="
+    let author = "";
+    const authorPatterns = [
+      /\|\s*auteur\s*=\s*([^\n|}\]]+)/i,
+      /\|\s*dramaturge\s*=\s*([^\n|}\]]+)/i,
+      /\|\s*écrivain\s*=\s*([^\n|}\]]+)/i,
+      /\|\s*auteurs\s*=\s*([^\n|}\]]+)/i,
+      /\|\s*scénariste\s*=\s*([^\n|}\]]+)/i,
+      /\|\s*writer\s*=\s*([^\n|}\]]+)/i,
+    ];
+    for(const pattern of authorPatterns){
+      const match = wikitext.match(pattern);
+      if(match){
+        // Nettoie les balises wiki [[Nom|Nom affiché]] → Nom affiché
+        author = match[1]
+          .replace(/\[\[([^\]|]+\|)?([^\]]+)\]\]/g, "$2")
+          .replace(/\{\{[^}]+\}\}/g, "")
+          .replace(/<[^>]+>/g, "")
+          .trim();
+        if(author) break;
+      }
+    }
+
+    // Construit un synopsis complet — prend les 4 premiers paragraphes
+    const paragraphs = extract
+      .split("\n")
+      .filter((p: string) => p.trim().length > 60)
+      .slice(0, 4)
+      .join("\n\n");
+
+    return { synopsis: paragraphs, author, posterUrl };
+  } catch { return {synopsis:"", author:"", posterUrl:""}; }
 };
 
 const LogoMark = ({ size = 36 }: { size?: number }) => (
@@ -314,12 +355,11 @@ const SourceBadge = ({ source }: any) => {
 };
 
 const PlayFormModal = ({ play, onClose, onSave, existingPlays=[] }: any) => {
-  const empty: any = {title:"",playwright:"",year:"",genre:"",duration:"",cast:"",synopsis:"",theater:"",posterUrl:"",billetReducUrl:"",ticketmasterUrl:"",priceMin:"",priceMax:"",availability:{startDate:"",endDate:"",days:[]},under26Available:false,under26Price:"",under26Conditions:""};
-  const [form,setForm]=useState<any>(play?{...empty,...play,availability:play.availability||{startDate:"",endDate:"",days:[]}}:empty);
+  const empty: any = { title:"", playwright:"", synopsis:"", posterUrl:"" };
+  const [form,setForm]=useState<any>(play?{...empty,...play}:empty);
   const [loading,setLoading]=useState(false);
   const [step,setStep]=useState<"search"|"edit">(play?"edit":"search");
-  const [titleInput,setTitleInput]=useState("");
-  const [results,setResults]=useState<any[]>([]);
+  const [titleInput,setTitleInput]=useState(play?.title||"");
   const [wikiResults,setWikiResults]=useState<any[]>([]);
   const [searching,setSearching]=useState(false);
   const [autoSuggestions,setAutoSuggestions]=useState<any[]>([]);
@@ -334,7 +374,7 @@ const PlayFormModal = ({ play, onClose, onSave, existingPlays=[] }: any) => {
   },[]);
 
   const handleTitleInput=(val:string)=>{
-    setTitleInput(val);setResults([]);setWikiResults([]);
+    setTitleInput(val);setWikiResults([]);
     if(val.length>=2){
       const matches=existingPlays.filter((p:any)=>p.title?.toLowerCase().includes(val.toLowerCase()));
       setAutoSuggestions(matches.slice(0,6));
@@ -344,105 +384,82 @@ const PlayFormModal = ({ play, onClose, onSave, existingPlays=[] }: any) => {
 
   const handleSearch=async()=>{
     if(!titleInput.trim())return toast("Entrez un titre","error");
-    setSearching(true);setAutoSuggestions([]);setShowAuto(false);setResults([]);setWikiResults([]);
-    const [oaRes,podRes,tmRes]=await Promise.all([
-      searchOpenAgenda(titleInput).catch(()=>[]),
-      searchParisOpenData(titleInput).catch(()=>[]),
-      searchTicketmaster(titleInput).catch(()=>[]),
-    ]);
-    const combined:any[]=[];
-    oaRes.forEach((r:any)=>{const p=openAgendaToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"openagenda",data:p});});
-    podRes.forEach((r:any)=>{const p=parisOpenDataToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin==="0"?"Gratuit":p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"paris",data:p});});
-    tmRes.forEach((r:any)=>{const p=ticketmasterToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"ticketmaster",data:p});});
-    setResults(combined);
-    if(combined.length===0){toast("Rien trouvé — essayez Wikipédia ou créez manuellement","info");const wikiRes=await searchWikipedia(titleInput);setWikiResults(wikiRes);}
+    setSearching(true);setAutoSuggestions([]);setShowAuto(false);setWikiResults([]);
+    const results=await searchWikipedia(titleInput);
+    setWikiResults(results);
+    if(results.length===0)toast("Aucun résultat. Créez manuellement.","info");
     setSearching(false);
   };
 
-  const handleSelectResult=(playData:any)=>{
-    setForm({...empty,...playData});
-    const src=playData.sourceId?.startsWith("oa")?"openagenda":playData.sourceId?.startsWith("pod")?"paris":playData.sourceId?.startsWith("tm")?"ticketmaster":"";
-    setImportedFrom(src);setStep("edit");toast("Données importées !","success");
-  };
   const handleSelectWiki=async(result:any)=>{
-    setSearching(true);const extract=await fetchWikipediaSummary(result.title);
-    setForm({...empty,title:result.title.replace(/ \(.*\)/,""),synopsis:extract.slice(0,500)});
+    setSearching(true);
+    toast("Récupération des informations…","info");
+    const info=await fetchWikipediaInfo(result.title);
+    setForm({
+      title: result.title.replace(/ \(.*\)/,""),
+      playwright: info.author,
+      synopsis: info.synopsis,
+      posterUrl: info.posterUrl,
+    });
     setWikiResults([]);setStep("edit");setSearching(false);setImportedFrom("wikipedia");
-    toast("Synopsis récupéré. Complétez les autres infos.","info");
+    toast("Informations récupérées depuis Wikipédia !","success");
   };
-  const handleSave=async()=>{if(!form.title.trim())return toast("Titre obligatoire","error");setLoading(true);try{await onSave(form);onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}};
+
+  const handleSave=async()=>{
+    if(!form.title.trim())return toast("Titre obligatoire","error");
+    setLoading(true);
+    try{await onSave(form);onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}
+  };
 
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,backdropFilter:"blur(4px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:600,maxHeight:"92vh",overflowY:"auto",boxShadow:"var(--shadow-lg)"}} className="fade">
+      <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:540,maxHeight:"92vh",overflowY:"auto",boxShadow:"var(--shadow-lg)"}} className="fade">
         <div style={{padding:"24px 28px 0",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
           <h2 className="serif" style={{fontSize:20}}>{play?"Modifier la pièce":"Ajouter une pièce"}</h2>
           <button style={B.icon(false)} onClick={onClose}><Ic n="close" s={16} c="var(--ink3)"/></button>
         </div>
+
         {step==="search"&&!play?(
           <div style={{padding:"0 28px 28px"}}>
-            <p style={{color:"var(--ink3)",fontSize:14,marginBottom:16}}>Recherchez simultanément sur <b>OpenAgenda</b>, <b>Paris Open Data</b> et <b>Ticketmaster</b>.</p>
+            <p style={{color:"var(--ink3)",fontSize:14,marginBottom:16}}>Tapez le titre — les informations seront récupérées automatiquement depuis Wikipédia.</p>
             <FRow>
               <Lbl>Titre de la pièce</Lbl>
               <div ref={autoRef} style={{position:"relative"}}>
-                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano…" autoFocus onKeyDown={e=>e.key==="Enter"&&handleSearch()} onFocus={()=>autoSuggestions.length>0&&setShowAuto(true)}/>
+                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano, Le Misanthrope…" autoFocus onKeyDown={e=>e.key==="Enter"&&handleSearch()} onFocus={()=>autoSuggestions.length>0&&setShowAuto(true)}/>
                 {showAuto&&autoSuggestions.length>0&&(
                   <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:20}}>
                     <div style={{padding:"8px 14px",fontSize:11,color:"var(--ink4)",fontWeight:600,textTransform:"uppercase" as const,letterSpacing:".05em",borderBottom:"1px solid var(--cream2)"}}>Déjà dans votre catalogue</div>
                     {autoSuggestions.map((p:any,i:number)=>(
-                      <div key={i} onClick={()=>{setTitleInput(p.title);setShowAuto(false);setForm({...empty,...p,availability:p.availability||{startDate:"",endDate:"",days:[]}});setStep("edit");}}
+                      <div key={i} onClick={()=>{setTitleInput(p.title);setShowAuto(false);setForm({...empty,...p});setStep("edit");}}
                         style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)",display:"flex",alignItems:"center",gap:10}}
                         onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
                         onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
                         {p.posterUrl?<img src={p.posterUrl} alt="" style={{width:28,height:40,objectFit:"cover",borderRadius:4,flexShrink:0}}/>:<div style={{width:28,height:40,borderRadius:4,background:"var(--cream2)",flexShrink:0}}/>}
-                        <div><div style={{fontWeight:600,fontSize:13}}>{p.title}</div><div style={{fontSize:11,color:"var(--ink4)"}}>{p.playwright||p.theater}</div></div>
+                        <div><div style={{fontWeight:600,fontSize:13}}>{p.title}</div><div style={{fontSize:11,color:"var(--ink4)"}}>{p.playwright}</div></div>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
             </FRow>
-            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:20}}>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:16}}>
               <button style={B.soft()} onClick={onClose}>Annuler</button>
-              <button style={B.soft({color:"var(--ink2)"})} onClick={handleSearch} disabled={searching}>{searching?<><span className="spin">⟳</span> Recherche…</>:<><Ic n="search" s={15} c="var(--ink3)"/>Rechercher</>}</button>
+              <button style={B.soft({color:"var(--ink2)"})} onClick={handleSearch} disabled={searching}>
+                {searching?<><span className="spin">⟳</span> Recherche…</>:<><Ic n="wiki" s={15} c="var(--ink3)"/>Rechercher sur Wikipédia</>}
+              </button>
               <button style={B.gold()} onClick={()=>{setForm({...empty,title:titleInput});setStep("edit");}}><Ic n="plus" s={15} c="#3D1F00"/>Manuel</button>
             </div>
-            {results.length>0&&(
-              <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden",marginBottom:16}}>
-                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <span>{results.length} résultat{results.length>1?"s":""}</span>
-                  <div style={{display:"flex",gap:4}}>
-                    {(["openagenda","paris","ticketmaster"] as string[]).filter(src=>results.some((r:any)=>r.source===src)).map(src=><SourceBadge key={src} source={src}/>)}
-                  </div>
-                </div>
-                {results.map((item:any,i:number)=>(
-                  <div key={i} onClick={()=>handleSelectResult(item.data)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)",display:"flex",gap:12,alignItems:"center"}}
-                    onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
-                    onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
-                    {item.img&&<img src={item.img} alt="" style={{width:48,height:36,objectFit:"cover",borderRadius:6,flexShrink:0}}/>}
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:14,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.title}</div>
-                      <div style={{fontSize:12,color:"var(--ink4)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-                        {item.theater&&<span>{item.theater}</span>}
-                        {item.date&&<span>{item.date}</span>}
-                        {item.price&&<span style={{color:"var(--red)",fontWeight:600}}>{item.price}</span>}
-                        <SourceBadge source={item.source}/>
-                      </div>
-                    </div>
-                    <Ic n="chevron" s={16} c="var(--ink4)"/>
-                  </div>
-                ))}
-              </div>
-            )}
             {wikiResults.length>0&&(
               <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden"}}>
-                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",display:"flex",alignItems:"center",gap:6}}><Ic n="wiki" s={13} c="var(--ink3)"/>Wikipédia — synopsis uniquement</div>
+                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",display:"flex",alignItems:"center",gap:6}}>
+                  <Ic n="wiki" s={13} c="var(--ink3)"/>Résultats Wikipédia
+                </div>
                 {wikiResults.map((r:any,i:number)=>(
                   <div key={i} onClick={()=>handleSelectWiki(r)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)"}}
                     onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
                     onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
                     <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>{r.title}</div>
-                    {r.description&&<div style={{fontSize:12,color:"var(--ink4)"}}>{r.description.slice(0,100)}</div>}
+                    {r.description&&<div style={{fontSize:12,color:"var(--ink4)"}}>{r.description.slice(0,120)}</div>}
                   </div>
                 ))}
               </div>
@@ -450,31 +467,18 @@ const PlayFormModal = ({ play, onClose, onSave, existingPlays=[] }: any) => {
           </div>
         ):(
           <div style={{padding:"0 28px 28px"}}>
-            {importedFrom&&<div style={{background:"rgba(46,160,67,.06)",border:"1px solid rgba(46,160,67,.2)",borderRadius:"var(--r-sm)",padding:"10px 14px",marginBottom:16,fontSize:13,color:"#166534",display:"flex",alignItems:"center",gap:8}}><Ic n="check" s={16} c="#166534"/>Importé depuis <SourceBadge source={importedFrom}/> — vérifiez et complétez</div>}
-            {[["title","Titre *"],["playwright","Auteur / Metteur en scène"],["theater","Théâtre"],["genre","Genre"],["duration","Durée"],["year","Année"],["cast","Distribution"]].map(([k,label])=>(
-              <FRow key={k}><Lbl>{label}</Lbl><input value={form[k]||""} onChange={e=>set(k,e.target.value)} placeholder={label.replace(" *","")}/></FRow>
-            ))}
-            <FRow><Lbl>Synopsis</Lbl><textarea value={form.synopsis||""} onChange={e=>set("synopsis",e.target.value)} rows={3} style={{resize:"vertical"}}/></FRow>
-            <FRow><Lbl>URL de l'affiche</Lbl><input value={form.posterUrl||""} onChange={e=>set("posterUrl",e.target.value)} placeholder="https://…"/></FRow>
-            <div style={{display:"flex",gap:10,marginBottom:16}}>
-              <div style={{flex:1}}><Lbl>Prix min (€)</Lbl><input value={form.priceMin||""} onChange={e=>set("priceMin",e.target.value)} type="number"/></div>
-              <div style={{flex:1}}><Lbl>Prix max (€)</Lbl><input value={form.priceMax||""} onChange={e=>set("priceMax",e.target.value)} type="number"/></div>
-            </div>
-            <FRow><Lbl>Période de représentation</Lbl><AvailabilityPicker value={form.availability} onChange={(v:any)=>set("availability",v)}/></FRow>
+            {importedFrom&&<div style={{background:"rgba(46,160,67,.06)",border:"1px solid rgba(46,160,67,.2)",borderRadius:"var(--r-sm)",padding:"10px 14px",marginBottom:16,fontSize:13,color:"#166534",display:"flex",alignItems:"center",gap:8}}><Ic n="check" s={16} c="#166534"/>Importé depuis Wikipédia — vérifiez et complétez si besoin</div>}
+            {searching&&<div style={{textAlign:"center",padding:"20px 0",color:"var(--ink3)"}}><span className="spin" style={{fontSize:24}}>⟳</span><p style={{marginTop:8,fontSize:14}}>Récupération des informations…</p></div>}
+            <FRow><Lbl>Titre *</Lbl><input value={form.title||""} onChange={e=>set("title",e.target.value)}/></FRow>
+            <FRow><Lbl>Auteur</Lbl><input value={form.playwright||""} onChange={e=>set("playwright",e.target.value)} placeholder="Ex: Molière, Racine…"/></FRow>
+            <FRow><Lbl>Synopsis</Lbl><textarea value={form.synopsis||""} onChange={e=>set("synopsis",e.target.value)} rows={6} style={{resize:"vertical"}} placeholder="Résumé de la pièce…"/></FRow>
             <FRow>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <input type="checkbox" id="u26" checked={form.under26Available||false} onChange={e=>set("under26Available",e.target.checked)} style={{width:18,height:18,accentColor:"var(--red)",flexShrink:0}}/>
-                <label htmlFor="u26" style={{fontSize:14,color:"var(--ink2)",cursor:"pointer"}}>Tarif moins de 26 ans disponible</label>
-              </div>
+              <Lbl>Affiche</Lbl>
+              {form.posterUrl&&<img src={form.posterUrl} alt="Affiche" style={{width:80,height:114,objectFit:"cover",borderRadius:"var(--r-sm)",marginBottom:8,display:"block"}}/>}
+              <input value={form.posterUrl||""} onChange={e=>set("posterUrl",e.target.value)} placeholder="URL de l'affiche (récupérée automatiquement ou collez une URL)"/>
             </FRow>
-            {form.under26Available&&<>
-              <FRow><Lbl>Prix — 26 ans (€)</Lbl><input value={form.under26Price||""} onChange={e=>set("under26Price",e.target.value)} type="number"/></FRow>
-              <FRow><Lbl>Conditions</Lbl><textarea value={form.under26Conditions||""} onChange={e=>set("under26Conditions",e.target.value)} rows={2}/></FRow>
-            </>}
-            <FRow><Lbl>Lien billetterie</Lbl><input value={form.ticketmasterUrl||""} onChange={e=>set("ticketmasterUrl",e.target.value)} placeholder="https://…"/></FRow>
-            <FRow><Lbl>Lien BilletRéduc</Lbl><input value={form.billetReducUrl||""} onChange={e=>set("billetReducUrl",e.target.value)} placeholder="https://…"/></FRow>
             <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
-              {!play&&<button style={B.soft()} onClick={()=>{setStep("search");setResults([]);setWikiResults([]);setImportedFrom("");}}>← Retour</button>}
+              {!play&&<button style={B.soft()} onClick={()=>{setStep("search");setWikiResults([]);setImportedFrom("");}}>← Retour</button>}
               <button style={B.soft()} onClick={onClose}>Annuler</button>
               <button style={B.gold()} onClick={handleSave} disabled={loading}>{loading?"Enregistrement…":"Enregistrer"}</button>
             </div>
@@ -644,7 +648,17 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
   useEffect(()=>{const h=(e:MouseEvent)=>{if(sugRef.current&&!sugRef.current.contains(e.target as Node))setShowSug(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
   useEffect(()=>{const unsub=onSnapshot(collection(db,"plays"),snap=>{setPlays(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});return unsub;},[]);
   useEffect(()=>{const unsub=onSnapshot(collection(db,"reviews"),snap=>{const map:any={};snap.docs.forEach(d=>{const r:any=d.data();if(r.status==="vu"&&r.rating>0){if(!map[r.playId])map[r.playId]=[];map[r.playId].push(r.rating);}});const avgs:any={};Object.entries(map).forEach(([id,ratings]:any)=>{avgs[id]=(ratings.reduce((a:number,b:number)=>a+b,0)/ratings.length).toFixed(1);});setAvgMap(avgs);});return unsub;},[]);
-  const handleSearch=(val:string)=>{setSearch(val);if(val.length>=2){const m=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(val.toLowerCase())));setSuggestions(m.map((p:any)=>p.title).filter(Boolean).slice(0,6));setShowSug(m.length>0);}else{setSuggestions([]);setShowSug(false);}};
+  const handleSearch=(val:string)=>{
+  setSearch(val);
+  if(val.length>=2){
+    const m=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(val.toLowerCase())));
+    setSuggestions(m.map((p:any)=>p.title).filter(Boolean).slice(0,6));
+    setShowSug(true);
+  } else {
+    setSuggestions([]);
+    setShowSug(false);
+  }
+};
   const seenPlayIds=new Set((userReviews||[]).filter((r:any)=>r.status==="vu").map((r:any)=>r.playId));
   let filtered=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(search.toLowerCase())));
   if(filterDate)filtered=filtered.filter(p=>isAvailableOnDate(p,filterDate));
