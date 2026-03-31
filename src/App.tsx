@@ -28,44 +28,97 @@ const LOGO_URL = "https://static.vecteezy.com/ti/vecteur-libre/p1/19997981-comed
 const DAYS = ["Lundi","Mardi","Mercredi","Jeudi","Vendredi","Samedi","Dimanche"];
 const TM_KEY = "ofeuNmt2KRcxucej1ZWVdjSGAUMlS5Bj";
 
+// ─── API 1 : OPENAGENDA ───────────────────────────────────────────────────────
+const searchOpenAgenda = async (keyword: string): Promise<any[]> => {
+  try {
+    const url = `https://api.openagenda.com/v2/events?search=${encodeURIComponent(keyword)}&city=Paris&lang=fr&size=6`;
+    const res = await fetch(url);
+    const data = await res.json();
+    return data.events || [];
+  } catch { return []; }
+};
+const openAgendaToPlay = (event: any) => {
+  const loc = event.location || {};
+  const dateStart = event.firstTiming?.begin?.split("T")[0] || "";
+  const dateEnd = event.lastTiming?.end?.split("T")[0] || dateStart;
+  return {
+    title: event.title?.fr || event.title?.en || "",
+    playwright: "",
+    year: dateStart ? new Date(dateStart).getFullYear().toString() : "",
+    genre: "Théâtre", duration: "", cast: "",
+    synopsis: event.description?.fr || event.longDescription?.fr || "",
+    theater: loc.name || loc.city || "",
+    posterUrl: event.image?.base && event.image?.filename ? event.image.base + event.image.filename : "",
+    billetReducUrl: "", ticketmasterUrl: event.originAgenda?.url || "",
+    priceMin: event.conditions?.fr || "", priceMax: "",
+    availability: { startDate: dateStart, endDate: dateEnd, days: [] },
+    under26Available: false, under26Price: "", under26Conditions: "",
+    sourceId: `oa-${event.uid}`,
+  };
+};
+
+// ─── API 2 : PARIS OPEN DATA ──────────────────────────────────────────────────
+const searchParisOpenData = async (keyword: string): Promise<any[]> => {
+  try {
+    const q = encodeURIComponent(keyword);
+    const url = `https://opendata.paris.fr/api/explore/v2.1/catalog/datasets/que-faire-a-paris-/records?where=title+like+%22${q}%22+and+tags+like+%22th%C3%A9%C3%A2tre%22&limit=6&lang=fr&timezone=Europe%2FParis`;
+    const res = await fetch(url);
+    const data = await res.json();
+    return data.results || [];
+  } catch { return []; }
+};
+const parisOpenDataToPlay = (r: any) => {
+  const dateStart = r.date_start?.split("T")[0] || "";
+  const dateEnd = r.date_end?.split("T")[0] || dateStart;
+  return {
+    title: r.title || "",
+    playwright: "", year: dateStart ? new Date(dateStart).getFullYear().toString() : "",
+    genre: "Théâtre", duration: "", cast: "",
+    synopsis: (r.description || r.lead_text || "").replace(/<[^>]*>/g, ""),
+    theater: r.address_name || r.location || "",
+    posterUrl: r.cover_url || "", billetReducUrl: "",
+    ticketmasterUrl: r.url || "",
+    priceMin: r.price_type === "gratuit" ? "0" : "", priceMax: "",
+    availability: { startDate: dateStart, endDate: dateEnd, days: [] },
+    under26Available: false, under26Price: "", under26Conditions: "",
+    sourceId: `pod-${r.id}`,
+  };
+};
+
+// ─── API 3 : TICKETMASTER ─────────────────────────────────────────────────────
 const searchTicketmaster = async (keyword: string): Promise<any[]> => {
   try {
-    const url = `https://app.ticketmaster.com/discovery/v2/events.json?keyword=${encodeURIComponent(keyword)}&countryCode=FR&city=Paris&classificationName=theatre&size=8&apikey=${TM_KEY}`;
+    const url = `https://app.ticketmaster.com/discovery/v2/events.json?keyword=${encodeURIComponent(keyword)}&countryCode=FR&city=Paris&classificationName=theatre&size=6&apikey=${TM_KEY}`;
     const res = await fetch(url);
     const data = await res.json();
     return data._embedded?.events || [];
   } catch { return []; }
 };
-
-const tmEventToPlay = (event: any) => {
+const ticketmasterToPlay = (event: any) => {
   const venue = event._embedded?.venues?.[0];
-  const priceRange = event.priceRanges?.[0];
-  const dates = event.dates?.start;
-  const image = event.images?.find((i:any) => i.ratio === "16_9" && i.width > 500) || event.images?.[0];
-  const startDate = dates?.localDate || "";
-  const endDate = event.dates?.end?.localDate || startDate;
+  const price = event.priceRanges?.[0];
+  const img = event.images?.find((i:any) => i.ratio === "16_9" && i.width > 500) || event.images?.[0];
+  const dateStart = event.dates?.start?.localDate || "";
+  const dateEnd = event.dates?.end?.localDate || dateStart;
   return {
     title: event.name || "",
-    playwright: "",
-    year: startDate ? new Date(startDate).getFullYear().toString() : "",
+    playwright: event.attractions?.map((a:any) => a.name).join(", ") || "",
+    year: dateStart ? new Date(dateStart).getFullYear().toString() : "",
     genre: event.classifications?.[0]?.subType?.name || "Théâtre",
-    duration: "",
-    cast: event.attractions?.map((a:any) => a.name).join(", ") || "",
+    duration: "", cast: "",
     synopsis: event.info || event.pleaseNote || "",
     theater: venue?.name || "",
-    posterUrl: image?.url || "",
-    billetReducUrl: "",
+    posterUrl: img?.url || "", billetReducUrl: "",
     ticketmasterUrl: event.url || "",
-    priceMin: priceRange ? Math.round(priceRange.min).toString() : "",
-    priceMax: priceRange ? Math.round(priceRange.max).toString() : "",
-    availability: { startDate, endDate, days: [] },
-    under26Available: false,
-    under26Price: "",
-    under26Conditions: "",
-    tmId: event.id,
+    priceMin: price ? Math.round(price.min).toString() : "",
+    priceMax: price ? Math.round(price.max).toString() : "",
+    availability: { startDate: dateStart, endDate: dateEnd, days: [] },
+    under26Available: false, under26Price: "", under26Conditions: "",
+    sourceId: `tm-${event.id}`,
   };
 };
 
+// ─── WIKIPEDIA (fallback) ─────────────────────────────────────────────────────
 const searchWikipedia = async (title: string): Promise<any[]> => {
   try {
     const url = `https://fr.wikipedia.org/w/api.php?action=opensearch&search=${encodeURIComponent(title)}&limit=5&namespace=0&format=json&origin=*`;
@@ -76,7 +129,6 @@ const searchWikipedia = async (title: string): Promise<any[]> => {
     return titles.map((t, i) => ({ title: t, description: descriptions[i] || "" }));
   } catch { return []; }
 };
-
 const fetchWikipediaSummary = async (title: string): Promise<string> => {
   try {
     const url = `https://fr.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
@@ -203,12 +255,10 @@ const Stars = ({ value=0, onChange, size=18, readonly=false }: any) => {
   const [hover,setHover]=useState(0);
   return <div style={{display:"flex",gap:3}}>{[1,2,3,4,5].map(i=><span key={i} onClick={()=>!readonly&&onChange?.(i)} onMouseEnter={()=>!readonly&&setHover(i)} onMouseLeave={()=>!readonly&&setHover(0)} style={{fontSize:size,cursor:readonly?"default":"pointer",color:i<=(hover||value)?"var(--gold)":"var(--border)",transition:"color .1s",userSelect:"none",lineHeight:1}}>★</span>)}</div>;
 };
-
 const Avatar = ({ user, size=36 }: any) => {
   const name=user?.pseudo||user?.displayName||"?";
   return user?.photoURL ? <img src={user.photoURL} alt={name} style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid var(--gold)",flexShrink:0}}/> : <div style={{width:size,height:size,borderRadius:"50%",background:"var(--red)",display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Libre Baskerville,serif",fontWeight:700,fontSize:size*.38,color:"var(--gold)",border:"2px solid var(--gold)",flexShrink:0}}>{name.charAt(0).toUpperCase()}</div>;
 };
-
 const Lbl = ({ children }: any) => <label style={{fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,color:"var(--ink4)",marginBottom:6,display:"block"}}>{children}</label>;
 const FRow = ({ children }: any) => <div style={{marginBottom:16}}>{children}</div>;
 const Empty = ({ icon, text, sub }: any) => (
@@ -235,10 +285,10 @@ const CheckboxFilter = ({ label, checked, onChange }: any) => (
   </label>
 );
 const AvailabilityPicker = ({ value, onChange }: any) => {
-  const v = value || { startDate:"", endDate:"", days:[] };
-  const set = (k:string, val:any) => onChange({ ...v, [k]: val });
-  const toggleDay = (day:string) => { const days=v.days||[]; set("days", days.includes(day)?days.filter((d:string)=>d!==day):[...days,day]); };
-  return (
+  const v=value||{startDate:"",endDate:"",days:[]};
+  const set=(k:string,val:any)=>onChange({...v,[k]:val});
+  const toggleDay=(day:string)=>{const days=v.days||[];set("days",days.includes(day)?days.filter((d:string)=>d!==day):[...days,day]);};
+  return(
     <div>
       <div style={{display:"flex",gap:10,marginBottom:10}}>
         <div style={{flex:1}}><Lbl>Du</Lbl><input type="date" value={v.startDate} onChange={e=>set("startDate",e.target.value)} style={{fontSize:14}}/></div>
@@ -246,102 +296,199 @@ const AvailabilityPicker = ({ value, onChange }: any) => {
       </div>
       <Lbl>Jours</Lbl>
       <div style={{display:"flex",flexWrap:"wrap",gap:6,marginTop:4}}>
-        {DAYS.map(day=>(
-          <button key={day} type="button" onClick={()=>toggleDay(day)} style={{padding:"6px 12px",borderRadius:100,fontSize:12,fontWeight:500,background:(v.days||[]).includes(day)?"var(--red)":"var(--cream2)",color:(v.days||[]).includes(day)?"white":"var(--ink3)",border:`1.5px solid ${(v.days||[]).includes(day)?"var(--red)":"var(--border)"}`,transition:"all .15s"}}>{day.slice(0,3)}</button>
-        ))}
+        {DAYS.map(day=><button key={day} type="button" onClick={()=>toggleDay(day)} style={{padding:"6px 12px",borderRadius:100,fontSize:12,fontWeight:500,background:(v.days||[]).includes(day)?"var(--red)":"var(--cream2)",color:(v.days||[]).includes(day)?"white":"var(--ink3)",border:`1.5px solid ${(v.days||[]).includes(day)?"var(--red)":"var(--border)"}`,transition:"all .15s"}}>{day.slice(0,3)}</button>)}
       </div>
     </div>
   );
 };
-const isAvailableToday=(play:any)=>{
-  if(!play?.availability?.startDate)return false;
-  const{startDate,endDate,days}=play.availability;
-  const today=new Date();const s=new Date(startDate);const e=new Date(endDate);
-  if(today<s||today>e)return false;
-  return days?.includes(DAYS[today.getDay()===0?6:today.getDay()-1]);
-};
-const isAvailableOnDate=(play:any,dateStr:string)=>{
-  if(!play?.availability?.startDate||!dateStr)return false;
-  const{startDate,endDate,days}=play.availability;
-  const d=new Date(dateStr);const s=new Date(startDate);const e=new Date(endDate);
-  if(d<s||d>e)return false;
-  return days?.includes(DAYS[d.getDay()===0?6:d.getDay()-1]);
-};
 
-const deletePlayWithCleanup = async (playId:string) => {
-  const reviewsSnap=await getDocs(query(collection(db,"reviews"),where("playId","==",playId)));
-  for(const r of reviewsSnap.docs){
-    const cs=await getDocs(query(collection(db,"reviewComments"),where("reviewId","==",r.id)));
-    for(const c of cs.docs) await deleteDoc(doc(db,"reviewComments",c.id));
-    await deleteDoc(doc(db,"reviews",r.id));
-  }
-  await deleteDoc(doc(db,"plays",playId));
-};
-
-const HeartButton = ({ playId, playTitle, playPlaywright, currentUser, userProfile }: any) => {
-  const [inWishlist,setInWishlist]=useState(false);
-  const [reviewId,setReviewId]=useState<string|null>(null);
-  const [animating,setAnimating]=useState(false);
-  const [loading,setLoading]=useState(true);
-  useEffect(()=>{
-    if(!currentUser||!playId){setLoading(false);return;}
-    const unsub=onSnapshot(query(collection(db,"reviews"),where("playId","==",playId),where("userId","==",currentUser.uid),where("status","==","a-voir")),snap=>{setInWishlist(!snap.empty);setReviewId(snap.empty?null:snap.docs[0].id);setLoading(false);});
-    return unsub;
-  },[currentUser,playId]);
-  const toggle=async()=>{
-    if(!currentUser)return toast("Connectez-vous","error");
-    setAnimating(true);setTimeout(()=>setAnimating(false),400);setLoading(true);
-    try{
-      if(inWishlist&&reviewId){await deleteDoc(doc(db,"reviews",reviewId));toast("Retiré de la wishlist","info");}
-      else{await addDoc(collection(db,"reviews"),{playId,userId:currentUser.uid,userPseudo:userProfile?.pseudo||"Anonyme",rating:0,comment:"",status:"a-voir",playTitle,playPlaywright,createdAt:serverTimestamp()});toast("Ajouté à la wishlist !","success");}
-    }catch{toast("Erreur","error");}finally{setLoading(false);}
+const SourceBadge = ({ source }: any) => {
+  const cfg: any = {
+    openagenda:{label:"OpenAgenda",color:"#2563EB",bg:"rgba(37,99,235,.08)"},
+    paris:{label:"Paris Open Data",color:"#059669",bg:"rgba(5,150,105,.08)"},
+    ticketmaster:{label:"Ticketmaster",color:"#7C3AED",bg:"rgba(124,58,237,.08)"},
+    wikipedia:{label:"Wikipédia",color:"#B45309",bg:"rgba(180,83,9,.08)"},
   };
-  return <button onClick={toggle} disabled={loading} className={animating?"heart-pop":""} style={{width:44,height:44,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:inWishlist?"rgba(185,28,28,.08)":"var(--cream2)",border:`1.5px solid ${inWishlist?"var(--red)":"var(--border)"}`,transition:"all .2s",flexShrink:0}}><Ic n="heart" s={20} c={inWishlist?"var(--red)":"var(--ink4)"} fill={inWishlist?"var(--red)":"none"}/></button>;
+  const c=cfg[source]||{label:source,color:"var(--ink3)",bg:"var(--cream2)"};
+  return <span style={{fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100,background:c.bg,color:c.color,border:`1px solid ${c.color}22`,textTransform:"uppercase" as const,letterSpacing:".04em"}}>{c.label}</span>;
 };
 
-const ReviewComments = ({ reviewId, reviewOwnerId, currentUser, userProfile }: any) => {
-  const [comments,setComments]=useState<any[]>([]);
-  const [open,setOpen]=useState(false);
-  const [text,setText]=useState("");
+const PlayFormModal = ({ play, onClose, onSave, existingPlays=[] }: any) => {
+  const empty: any = {title:"",playwright:"",year:"",genre:"",duration:"",cast:"",synopsis:"",theater:"",posterUrl:"",billetReducUrl:"",ticketmasterUrl:"",priceMin:"",priceMax:"",availability:{startDate:"",endDate:"",days:[]},under26Available:false,under26Price:"",under26Conditions:""};
+  const [form,setForm]=useState<any>(play?{...empty,...play,availability:play.availability||{startDate:"",endDate:"",days:[]}}:empty);
   const [loading,setLoading]=useState(false);
+  const [step,setStep]=useState<"search"|"edit">(play?"edit":"search");
+  const [titleInput,setTitleInput]=useState("");
+  const [results,setResults]=useState<any[]>([]);
+  const [wikiResults,setWikiResults]=useState<any[]>([]);
+  const [searching,setSearching]=useState(false);
+  const [autoSuggestions,setAutoSuggestions]=useState<any[]>([]);
+  const [showAuto,setShowAuto]=useState(false);
+  const [importedFrom,setImportedFrom]=useState("");
+  const autoRef=useRef<HTMLDivElement>(null);
+  const set=(k:string,v:any)=>setForm((p:any)=>({...p,[k]:v}));
+
   useEffect(()=>{
-    if(!open)return;
-    const unsub=onSnapshot(query(collection(db,"reviewComments"),where("reviewId","==",reviewId),orderBy("createdAt","asc")),snap=>{setComments(snap.docs.map(d=>({id:d.id,...d.data()})));});
-    return unsub;
-  },[reviewId,open]);
-  const sendComment=async()=>{
-    if(!text.trim()||!currentUser)return;
-    setLoading(true);
-    try{
-      await addDoc(collection(db,"reviewComments"),{reviewId,userId:currentUser.uid,userPseudo:userProfile?.pseudo||"Anonyme",text:text.trim(),createdAt:serverTimestamp()});
-      if(reviewOwnerId&&reviewOwnerId!==currentUser.uid) await addDoc(collection(db,"notifications"),{toUserId:reviewOwnerId,fromPseudo:userProfile?.pseudo||"Quelqu'un",type:"comment",reviewId,text:text.trim(),read:false,createdAt:serverTimestamp()});
-      setText("");
-    }catch{toast("Erreur","error");}finally{setLoading(false);}
+    const h=(e:MouseEvent)=>{if(autoRef.current&&!autoRef.current.contains(e.target as Node))setShowAuto(false);};
+    document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);
+  },[]);
+
+  const handleTitleInput=(val:string)=>{
+    setTitleInput(val);setResults([]);setWikiResults([]);
+    if(val.length>=2){
+      const matches=existingPlays.filter((p:any)=>p.title?.toLowerCase().includes(val.toLowerCase()));
+      setAutoSuggestions(matches.slice(0,6));
+      setShowAuto(matches.length>0);
+    } else {setAutoSuggestions([]);setShowAuto(false);}
   };
+
+  const handleSearch=async()=>{
+    if(!titleInput.trim())return toast("Entrez un titre","error");
+    setSearching(true);setAutoSuggestions([]);setShowAuto(false);setResults([]);setWikiResults([]);
+    const [oaRes,podRes,tmRes]=await Promise.all([
+      searchOpenAgenda(titleInput).catch(()=>[]),
+      searchParisOpenData(titleInput).catch(()=>[]),
+      searchTicketmaster(titleInput).catch(()=>[]),
+    ]);
+    const combined:any[]=[];
+    oaRes.forEach((r:any)=>{const p=openAgendaToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"openagenda",data:p});});
+    podRes.forEach((r:any)=>{const p=parisOpenDataToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin==="0"?"Gratuit":p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"paris",data:p});});
+    tmRes.forEach((r:any)=>{const p=ticketmasterToPlay(r);if(p.title)combined.push({title:p.title,theater:p.theater,date:p.availability?.startDate?new Date(p.availability.startDate).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"}):"",price:p.priceMin?`À partir de ${p.priceMin}€`:"",img:p.posterUrl,source:"ticketmaster",data:p});});
+    setResults(combined);
+    if(combined.length===0){toast("Rien trouvé — essayez Wikipédia ou créez manuellement","info");const wikiRes=await searchWikipedia(titleInput);setWikiResults(wikiRes);}
+    setSearching(false);
+  };
+
+  const handleSelectResult=(playData:any)=>{
+    setForm({...empty,...playData});
+    const src=playData.sourceId?.startsWith("oa")?"openagenda":playData.sourceId?.startsWith("pod")?"paris":playData.sourceId?.startsWith("tm")?"ticketmaster":"";
+    setImportedFrom(src);setStep("edit");toast("Données importées !","success");
+  };
+  const handleSelectWiki=async(result:any)=>{
+    setSearching(true);const extract=await fetchWikipediaSummary(result.title);
+    setForm({...empty,title:result.title.replace(/ \(.*\)/,""),synopsis:extract.slice(0,500)});
+    setWikiResults([]);setStep("edit");setSearching(false);setImportedFrom("wikipedia");
+    toast("Synopsis récupéré. Complétez les autres infos.","info");
+  };
+  const handleSave=async()=>{if(!form.title.trim())return toast("Titre obligatoire","error");setLoading(true);try{await onSave(form);onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}};
+
   return(
-    <div style={{marginTop:10}}>
-      <button style={{background:"transparent",color:"var(--ink4)",fontSize:13,display:"flex",alignItems:"center",gap:5,padding:"4px 0"}} onClick={()=>setOpen(p=>!p)}><Ic n="comment" s={14} c="var(--ink4)"/>{open?"Masquer":"Commenter"}</button>
-      {open&&<div style={{marginTop:10,paddingLeft:12,borderLeft:"2px solid var(--border)"}}>
-        {comments.length===0&&<p style={{color:"var(--ink4)",fontSize:13,marginBottom:8,fontStyle:"italic"}}>Aucun commentaire.</p>}
-        {comments.map((c:any)=><div key={c.id} style={{marginBottom:10,fontSize:13}}><span style={{fontWeight:600,color:"var(--ink)"}}>{c.userPseudo} </span><span style={{color:"var(--ink2)"}}>{c.text}</span></div>)}
-        {currentUser&&<div style={{display:"flex",gap:8,marginTop:10}}>
-          <input value={text} onChange={e=>setText(e.target.value)} placeholder="Écrire un commentaire…" style={{fontSize:13,padding:"8px 12px",borderRadius:100}} onKeyDown={e=>e.key==="Enter"&&sendComment()}/>
-          <button style={B.gold({padding:"8px 16px",fontSize:13,flexShrink:0})} onClick={sendComment} disabled={loading||!text.trim()}>Envoyer</button>
-        </div>}
-      </div>}
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,backdropFilter:"blur(4px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
+      <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:600,maxHeight:"92vh",overflowY:"auto",boxShadow:"var(--shadow-lg)"}} className="fade">
+        <div style={{padding:"24px 28px 0",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
+          <h2 className="serif" style={{fontSize:20}}>{play?"Modifier la pièce":"Ajouter une pièce"}</h2>
+          <button style={B.icon(false)} onClick={onClose}><Ic n="close" s={16} c="var(--ink3)"/></button>
+        </div>
+        {step==="search"&&!play?(
+          <div style={{padding:"0 28px 28px"}}>
+            <p style={{color:"var(--ink3)",fontSize:14,marginBottom:16}}>Recherchez simultanément sur <b>OpenAgenda</b>, <b>Paris Open Data</b> et <b>Ticketmaster</b>.</p>
+            <FRow>
+              <Lbl>Titre de la pièce</Lbl>
+              <div ref={autoRef} style={{position:"relative"}}>
+                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano…" autoFocus onKeyDown={e=>e.key==="Enter"&&handleSearch()} onFocus={()=>autoSuggestions.length>0&&setShowAuto(true)}/>
+                {showAuto&&autoSuggestions.length>0&&(
+                  <div style={{position:"absolute",top:"calc(100% + 4px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:20}}>
+                    <div style={{padding:"8px 14px",fontSize:11,color:"var(--ink4)",fontWeight:600,textTransform:"uppercase" as const,letterSpacing:".05em",borderBottom:"1px solid var(--cream2)"}}>Déjà dans votre catalogue</div>
+                    {autoSuggestions.map((p:any,i:number)=>(
+                      <div key={i} onClick={()=>{setTitleInput(p.title);setShowAuto(false);setForm({...empty,...p,availability:p.availability||{startDate:"",endDate:"",days:[]}});setStep("edit");}}
+                        style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)",display:"flex",alignItems:"center",gap:10}}
+                        onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
+                        onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
+                        {p.posterUrl?<img src={p.posterUrl} alt="" style={{width:28,height:40,objectFit:"cover",borderRadius:4,flexShrink:0}}/>:<div style={{width:28,height:40,borderRadius:4,background:"var(--cream2)",flexShrink:0}}/>}
+                        <div><div style={{fontWeight:600,fontSize:13}}>{p.title}</div><div style={{fontSize:11,color:"var(--ink4)"}}>{p.playwright||p.theater}</div></div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </FRow>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:20}}>
+              <button style={B.soft()} onClick={onClose}>Annuler</button>
+              <button style={B.soft({color:"var(--ink2)"})} onClick={handleSearch} disabled={searching}>{searching?<><span className="spin">⟳</span> Recherche…</>:<><Ic n="search" s={15} c="var(--ink3)"/>Rechercher</>}</button>
+              <button style={B.gold()} onClick={()=>{setForm({...empty,title:titleInput});setStep("edit");}}><Ic n="plus" s={15} c="#3D1F00"/>Manuel</button>
+            </div>
+            {results.length>0&&(
+              <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden",marginBottom:16}}>
+                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span>{results.length} résultat{results.length>1?"s":""}</span>
+                  <div style={{display:"flex",gap:4}}>
+                    {(["openagenda","paris","ticketmaster"] as string[]).filter(src=>results.some((r:any)=>r.source===src)).map(src=><SourceBadge key={src} source={src}/>)}
+                  </div>
+                </div>
+                {results.map((item:any,i:number)=>(
+                  <div key={i} onClick={()=>handleSelectResult(item.data)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)",display:"flex",gap:12,alignItems:"center"}}
+                    onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
+                    onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
+                    {item.img&&<img src={item.img} alt="" style={{width:48,height:36,objectFit:"cover",borderRadius:6,flexShrink:0}}/>}
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,fontSize:14,marginBottom:3,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.title}</div>
+                      <div style={{fontSize:12,color:"var(--ink4)",display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+                        {item.theater&&<span>{item.theater}</span>}
+                        {item.date&&<span>{item.date}</span>}
+                        {item.price&&<span style={{color:"var(--red)",fontWeight:600}}>{item.price}</span>}
+                        <SourceBadge source={item.source}/>
+                      </div>
+                    </div>
+                    <Ic n="chevron" s={16} c="var(--ink4)"/>
+                  </div>
+                ))}
+              </div>
+            )}
+            {wikiResults.length>0&&(
+              <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden"}}>
+                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",display:"flex",alignItems:"center",gap:6}}><Ic n="wiki" s={13} c="var(--ink3)"/>Wikipédia — synopsis uniquement</div>
+                {wikiResults.map((r:any,i:number)=>(
+                  <div key={i} onClick={()=>handleSelectWiki(r)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)"}}
+                    onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"}
+                    onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
+                    <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>{r.title}</div>
+                    {r.description&&<div style={{fontSize:12,color:"var(--ink4)"}}>{r.description.slice(0,100)}</div>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ):(
+          <div style={{padding:"0 28px 28px"}}>
+            {importedFrom&&<div style={{background:"rgba(46,160,67,.06)",border:"1px solid rgba(46,160,67,.2)",borderRadius:"var(--r-sm)",padding:"10px 14px",marginBottom:16,fontSize:13,color:"#166534",display:"flex",alignItems:"center",gap:8}}><Ic n="check" s={16} c="#166534"/>Importé depuis <SourceBadge source={importedFrom}/> — vérifiez et complétez</div>}
+            {[["title","Titre *"],["playwright","Auteur / Metteur en scène"],["theater","Théâtre"],["genre","Genre"],["duration","Durée"],["year","Année"],["cast","Distribution"]].map(([k,label])=>(
+              <FRow key={k}><Lbl>{label}</Lbl><input value={form[k]||""} onChange={e=>set(k,e.target.value)} placeholder={label.replace(" *","")}/></FRow>
+            ))}
+            <FRow><Lbl>Synopsis</Lbl><textarea value={form.synopsis||""} onChange={e=>set("synopsis",e.target.value)} rows={3} style={{resize:"vertical"}}/></FRow>
+            <FRow><Lbl>URL de l'affiche</Lbl><input value={form.posterUrl||""} onChange={e=>set("posterUrl",e.target.value)} placeholder="https://…"/></FRow>
+            <div style={{display:"flex",gap:10,marginBottom:16}}>
+              <div style={{flex:1}}><Lbl>Prix min (€)</Lbl><input value={form.priceMin||""} onChange={e=>set("priceMin",e.target.value)} type="number"/></div>
+              <div style={{flex:1}}><Lbl>Prix max (€)</Lbl><input value={form.priceMax||""} onChange={e=>set("priceMax",e.target.value)} type="number"/></div>
+            </div>
+            <FRow><Lbl>Période de représentation</Lbl><AvailabilityPicker value={form.availability} onChange={(v:any)=>set("availability",v)}/></FRow>
+            <FRow>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <input type="checkbox" id="u26" checked={form.under26Available||false} onChange={e=>set("under26Available",e.target.checked)} style={{width:18,height:18,accentColor:"var(--red)",flexShrink:0}}/>
+                <label htmlFor="u26" style={{fontSize:14,color:"var(--ink2)",cursor:"pointer"}}>Tarif moins de 26 ans disponible</label>
+              </div>
+            </FRow>
+            {form.under26Available&&<>
+              <FRow><Lbl>Prix — 26 ans (€)</Lbl><input value={form.under26Price||""} onChange={e=>set("under26Price",e.target.value)} type="number"/></FRow>
+              <FRow><Lbl>Conditions</Lbl><textarea value={form.under26Conditions||""} onChange={e=>set("under26Conditions",e.target.value)} rows={2}/></FRow>
+            </>}
+            <FRow><Lbl>Lien billetterie</Lbl><input value={form.ticketmasterUrl||""} onChange={e=>set("ticketmasterUrl",e.target.value)} placeholder="https://…"/></FRow>
+            <FRow><Lbl>Lien BilletRéduc</Lbl><input value={form.billetReducUrl||""} onChange={e=>set("billetReducUrl",e.target.value)} placeholder="https://…"/></FRow>
+            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
+              {!play&&<button style={B.soft()} onClick={()=>{setStep("search");setResults([]);setWikiResults([]);setImportedFrom("");}}>← Retour</button>}
+              <button style={B.soft()} onClick={onClose}>Annuler</button>
+              <button style={B.gold()} onClick={handleSave} disabled={loading}>{loading?"Enregistrement…":"Enregistrer"}</button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 };
-
 const ReviewModal = ({ play, existing, onClose, onSave }: any) => {
   const [rating,setRating]=useState(existing?.rating||0);
   const [comment,setComment]=useState(existing?.comment||"");
   const [loading,setLoading]=useState(false);
-  const handleSave=async()=>{
-    if(!rating)return toast("Choisissez une note","error");
-    setLoading(true);
-    try{await onSave({rating,comment,status:"vu"});onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}
-  };
+  const handleSave=async()=>{if(!rating)return toast("Choisissez une note","error");setLoading(true);try{await onSave({rating,comment,status:"vu"});onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}};
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,backdropFilter:"blur(4px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:460,boxShadow:"var(--shadow-lg)"}} className="fade">
@@ -352,7 +499,7 @@ const ReviewModal = ({ play, existing, onClose, onSave }: any) => {
         <p style={{padding:"0 28px",color:"var(--ink3)",fontSize:14,marginBottom:22}}>{play.title}</p>
         <div style={{padding:"0 28px 28px"}}>
           <FRow><Lbl>Note</Lbl><Stars value={rating} onChange={setRating} size={28}/></FRow>
-          <FRow><Lbl>Commentaire (optionnel)</Lbl><textarea value={comment} onChange={e=>setComment(e.target.value)} rows={4} style={{resize:"vertical"}}/></FRow>
+          <FRow><Lbl>Commentaire (optionnel)</Lbl><textarea value={comment} onChange={e=>setComment(e.target.value)} rows={4} placeholder="Vos impressions…" style={{resize:"vertical"}}/></FRow>
           <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
             <button style={B.soft()} onClick={onClose}>Annuler</button>
             <button style={B.gold()} onClick={handleSave} disabled={loading}>{loading?"…":"Enregistrer"}</button>
@@ -363,130 +510,32 @@ const ReviewModal = ({ play, existing, onClose, onSave }: any) => {
   );
 };
 
-const PlayFormModal = ({ play, onClose, onSave, existingTitles=[] }: any) => {
-  const empty: any = { title:"",playwright:"",year:"",genre:"",duration:"",cast:"",synopsis:"",theater:"",posterUrl:"",billetReducUrl:"",ticketmasterUrl:"",priceMin:"",priceMax:"",availability:{startDate:"",endDate:"",days:[]},under26Available:false,under26Price:"",under26Conditions:"" };
-  const [form,setForm]=useState<any>(play?{...empty,...play,availability:play.availability||{startDate:"",endDate:"",days:[]}}:empty);
-  const [loading,setLoading]=useState(false);
-  const [step,setStep]=useState<"search"|"edit">(play?"edit":"search");
-  const [titleInput,setTitleInput]=useState("");
-  const [tmResults,setTmResults]=useState<any[]>([]);
-  const [wikiResults,setWikiResults]=useState<any[]>([]);
-  const [searching,setSearching]=useState(false);
-  const [suggestions,setSuggestions]=useState<string[]>([]);
-  const [searchMode,setSearchMode]=useState<"tm"|"wiki">("tm");
-  const set=(k:string,v:any)=>setForm((p:any)=>({...p,[k]:v}));
-  const handleTitleInput=(val:string)=>{setTitleInput(val);setTmResults([]);setWikiResults([]);if(val.length>=2)setSuggestions(existingTitles.filter((t:string)=>t.toLowerCase().includes(val.toLowerCase())).slice(0,5));else setSuggestions([]);};
-  const handleSearch=async()=>{
-    if(!titleInput.trim())return toast("Entrez un titre","error");
-    setSearching(true);setSuggestions([]);
-    if(searchMode==="tm"){const results=await searchTicketmaster(titleInput);setTmResults(results);if(results.length===0){toast("Aucun résultat Ticketmaster — essayez Wikipédia","info");setSearchMode("wiki");}}
-    else{const results=await searchWikipedia(titleInput);setWikiResults(results);if(results.length===0)toast("Aucun résultat. Créez manuellement.","info");}
-    setSearching(false);
-  };
-  const handleSelectTm=(event:any)=>{setForm({...empty,...tmEventToPlay(event)});setStep("edit");toast("Données importées depuis Ticketmaster !","success");};
-  const handleSelectWiki=async(result:any)=>{setSearching(true);const extract=await fetchWikipediaSummary(result.title);setForm({...empty,title:result.title.replace(/ \(.*\)/,""),synopsis:extract.slice(0,500)});setWikiResults([]);setStep("edit");setSearching(false);toast("Synopsis récupéré. Complétez les autres infos.","info");};
-  const handleSave=async()=>{if(!form.title.trim())return toast("Titre obligatoire","error");setLoading(true);try{await onSave(form);onClose();}catch{toast("Erreur","error");}finally{setLoading(false);}};
+const ReviewComments = ({ reviewId, reviewOwnerId, currentUser, userProfile }: any) => {
+  const [comments,setComments]=useState<any[]>([]);const [open,setOpen]=useState(false);const [text,setText]=useState("");const [loading,setLoading]=useState(false);
+  useEffect(()=>{if(!open)return;const unsub=onSnapshot(query(collection(db,"reviewComments"),where("reviewId","==",reviewId),orderBy("createdAt","asc")),snap=>{setComments(snap.docs.map(d=>({id:d.id,...d.data()})));});return unsub;},[reviewId,open]);
+  const sendComment=async()=>{if(!text.trim()||!currentUser)return;setLoading(true);try{await addDoc(collection(db,"reviewComments"),{reviewId,userId:currentUser.uid,userPseudo:userProfile?.pseudo||"Anonyme",text:text.trim(),createdAt:serverTimestamp()});if(reviewOwnerId&&reviewOwnerId!==currentUser.uid)await addDoc(collection(db,"notifications"),{toUserId:reviewOwnerId,fromPseudo:userProfile?.pseudo||"Quelqu'un",type:"comment",reviewId,text:text.trim(),read:false,createdAt:serverTimestamp()});setText("");}catch{toast("Erreur","error");}finally{setLoading(false);}};
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,backdropFilter:"blur(4px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
-      <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:580,maxHeight:"92vh",overflowY:"auto",boxShadow:"var(--shadow-lg)"}} className="fade">
-        <div style={{padding:"24px 28px 0",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}>
-          <h2 className="serif" style={{fontSize:20}}>{play?"Modifier":"Ajouter une pièce"}</h2>
-          <button style={B.icon(false)} onClick={onClose}><Ic n="close" s={16} c="var(--ink3)"/></button>
-        </div>
-        {step==="search"&&!play?(
-          <div style={{padding:"0 28px 28px"}}>
-            <div style={{display:"flex",gap:0,marginBottom:16,border:"1.5px solid var(--border)",borderRadius:"var(--r-sm)",overflow:"hidden"}}>
-              {[["tm","🎟 Ticketmaster"],["wiki","📖 Wikipédia"]].map(([v,l])=>(
-                <button key={v} onClick={()=>{setSearchMode(v as any);setTmResults([]);setWikiResults([]);}} style={{flex:1,padding:"9px",background:searchMode===v?"var(--red)":"transparent",color:searchMode===v?"white":"var(--ink3)",border:"none",fontSize:13,fontWeight:searchMode===v?600:400}}>{l}</button>
-              ))}
-            </div>
-            <FRow>
-              <Lbl>Titre</Lbl>
-              <div style={{position:"relative"}}>
-                <input value={titleInput} onChange={e=>handleTitleInput(e.target.value)} placeholder="Ex: Phèdre, Cyrano…" autoFocus onKeyDown={e=>e.key==="Enter"&&handleSearch()}/>
-                {suggestions.length>0&&(
-                  <div style={{position:"absolute",top:"100%",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:10}}>
-                    <div style={{padding:"8px 12px",fontSize:11,color:"var(--ink4)",fontWeight:600,textTransform:"uppercase" as const,letterSpacing:".05em",borderBottom:"1px solid var(--cream2)"}}>Déjà dans la base</div>
-                    {suggestions.map((s:string,i:number)=>(
-                      <div key={i} onClick={()=>{setTitleInput(s);setSuggestions([]);setForm({...empty,title:s});setStep("edit");}} style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>{s}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </FRow>
-            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginBottom:16}}>
-              <button style={B.soft()} onClick={onClose}>Annuler</button>
-              <button style={B.soft({color:"var(--ink2)"})} onClick={handleSearch} disabled={searching}>{searching?<><span className="spin">⟳</span> Recherche…</>:<><Ic n="search" s={15} c="var(--ink3)"/>Rechercher</>}</button>
-              <button style={B.gold()} onClick={()=>{setForm({...empty,title:titleInput});setStep("edit");}}><Ic n="plus" s={15} c="#3D1F00"/>Manuel</button>
-            </div>
-            {tmResults.length>0&&(
-              <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden",marginBottom:12}}>
-                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em"}}>Ticketmaster — Paris</div>
-                {tmResults.map((event:any)=>{
-                  const img=event.images?.find((i:any)=>i.ratio==="16_9")||event.images?.[0];
-                  const price=event.priceRanges?.[0];const date=event.dates?.start?.localDate;
-                  return(<div key={event.id} onClick={()=>handleSelectTm(event)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)",display:"flex",gap:12,alignItems:"center"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
-                    {img&&<img src={img.url} alt="" style={{width:56,height:40,objectFit:"cover",borderRadius:6,flexShrink:0}}/>}
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:14,marginBottom:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{event.name}</div>
-                      <div style={{fontSize:12,color:"var(--ink4)",display:"flex",gap:8,flexWrap:"wrap"}}>
-                        {event._embedded?.venues?.[0]?.name&&<span>{event._embedded.venues[0].name}</span>}
-                        {date&&<span>{new Date(date).toLocaleDateString("fr-FR",{day:"numeric",month:"short",year:"numeric"})}</span>}
-                        {price&&<span style={{color:"var(--red)",fontWeight:600}}>À partir de {Math.round(price.min)}€</span>}
-                      </div>
-                    </div>
-                  </div>);
-                })}
-              </div>
-            )}
-            {wikiResults.length>0&&(
-              <div style={{border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",overflow:"hidden"}}>
-                <div style={{padding:"10px 14px",background:"var(--cream2)",fontSize:11,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em"}}>Wikipédia</div>
-                {wikiResults.map((r:any,i:number)=>(
-                  <div key={i} onClick={()=>handleSelectWiki(r)} style={{padding:"12px 14px",cursor:"pointer",borderBottom:"1px solid var(--cream2)"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>
-                    <div style={{fontWeight:600,fontSize:14,marginBottom:2}}>{r.title}</div>
-                    {r.description&&<div style={{fontSize:12,color:"var(--ink4)"}}>{r.description.slice(0,100)}</div>}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        ):(
-          <div style={{padding:"0 28px 28px"}}>
-            {form.tmId&&<div style={{background:"rgba(46,160,67,.08)",border:"1px solid rgba(46,160,67,.3)",borderRadius:"var(--r-sm)",padding:"10px 14px",marginBottom:16,fontSize:13,color:"#166534",display:"flex",alignItems:"center",gap:8}}><Ic n="check" s={16} c="#166534"/>Données importées depuis Ticketmaster</div>}
-            {[["title","Titre *"],["playwright","Auteur / Metteur en scène"],["theater","Théâtre"],["genre","Genre"],["duration","Durée"],["year","Année"],["cast","Distribution"]].map(([k,label])=>(
-              <FRow key={k}><Lbl>{label}</Lbl><input value={form[k]} onChange={e=>set(k,e.target.value)} placeholder={label.replace(" *","")}/></FRow>
-            ))}
-            <FRow><Lbl>Synopsis</Lbl><textarea value={form.synopsis} onChange={e=>set("synopsis",e.target.value)} rows={3} style={{resize:"vertical"}}/></FRow>
-            <FRow><Lbl>URL de l'affiche</Lbl><input value={form.posterUrl} onChange={e=>set("posterUrl",e.target.value)} placeholder="https://…"/></FRow>
-            <div style={{display:"flex",gap:10,marginBottom:16}}>
-              <div style={{flex:1}}><Lbl>Prix min (€)</Lbl><input value={form.priceMin} onChange={e=>set("priceMin",e.target.value)} type="number"/></div>
-              <div style={{flex:1}}><Lbl>Prix max (€)</Lbl><input value={form.priceMax} onChange={e=>set("priceMax",e.target.value)} type="number"/></div>
-            </div>
-            <FRow><Lbl>Période de représentation</Lbl><AvailabilityPicker value={form.availability} onChange={(v:any)=>set("availability",v)}/></FRow>
-            <FRow>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                <input type="checkbox" id="u26" checked={form.under26Available} onChange={e=>set("under26Available",e.target.checked)} style={{width:18,height:18,accentColor:"var(--red)",flexShrink:0}}/>
-                <label htmlFor="u26" style={{fontSize:14,color:"var(--ink2)",cursor:"pointer"}}>Tarif moins de 26 ans disponible</label>
-              </div>
-            </FRow>
-            {form.under26Available&&<>
-              <FRow><Lbl>Prix — 26 ans (€)</Lbl><input value={form.under26Price} onChange={e=>set("under26Price",e.target.value)} type="number"/></FRow>
-              <FRow><Lbl>Conditions</Lbl><textarea value={form.under26Conditions} onChange={e=>set("under26Conditions",e.target.value)} rows={2}/></FRow>
-            </>}
-            <FRow><Lbl>Lien Ticketmaster</Lbl><input value={form.ticketmasterUrl} onChange={e=>set("ticketmasterUrl",e.target.value)} placeholder="https://…"/></FRow>
-            <FRow><Lbl>Lien BilletRéduc</Lbl><input value={form.billetReducUrl} onChange={e=>set("billetReducUrl",e.target.value)} placeholder="https://…"/></FRow>
-            <div style={{display:"flex",gap:10,justifyContent:"flex-end",marginTop:8}}>
-              {!play&&<button style={B.soft()} onClick={()=>{setStep("search");setTmResults([]);setWikiResults([]);}}>← Retour</button>}
-              <button style={B.soft()} onClick={onClose}>Annuler</button>
-              <button style={B.gold()} onClick={handleSave} disabled={loading}>{loading?"Enregistrement…":"Enregistrer"}</button>
-            </div>
-          </div>
-        )}
-      </div>
+    <div style={{marginTop:10}}>
+      <button style={{background:"transparent",color:"var(--ink4)",fontSize:13,display:"flex",alignItems:"center",gap:5,padding:"4px 0"}} onClick={()=>setOpen(p=>!p)}><Ic n="comment" s={14} c="var(--ink4)"/>{open?"Masquer":"Commenter"}</button>
+      {open&&<div style={{marginTop:10,paddingLeft:12,borderLeft:"2px solid var(--border)"}}>
+        {comments.length===0&&<p style={{color:"var(--ink4)",fontSize:13,marginBottom:8,fontStyle:"italic"}}>Aucun commentaire.</p>}
+        {comments.map((c:any)=><div key={c.id} style={{marginBottom:10,fontSize:13}}><span style={{fontWeight:600,color:"var(--ink)"}}>{c.userPseudo} </span><span style={{color:"var(--ink2)"}}>{c.text}</span></div>)}
+        {currentUser&&<div style={{display:"flex",gap:8,marginTop:10}}><input value={text} onChange={e=>setText(e.target.value)} placeholder="Écrire un commentaire…" style={{fontSize:13,padding:"8px 12px",borderRadius:100}} onKeyDown={e=>e.key==="Enter"&&sendComment()}/><button style={B.gold({padding:"8px 16px",fontSize:13,flexShrink:0})} onClick={sendComment} disabled={loading||!text.trim()}>Envoyer</button></div>}
+      </div>}
     </div>
   );
 };
+
+const HeartButton = ({ playId, playTitle, playPlaywright, currentUser, userProfile }: any) => {
+  const [inWishlist,setInWishlist]=useState(false);const [reviewId,setReviewId]=useState<string|null>(null);const [animating,setAnimating]=useState(false);const [loading,setLoading]=useState(true);
+  useEffect(()=>{if(!currentUser||!playId){setLoading(false);return;}const unsub=onSnapshot(query(collection(db,"reviews"),where("playId","==",playId),where("userId","==",currentUser.uid),where("status","==","a-voir")),snap=>{setInWishlist(!snap.empty);setReviewId(snap.empty?null:snap.docs[0].id);setLoading(false);});return unsub;},[currentUser,playId]);
+  const toggle=async()=>{if(!currentUser)return toast("Connectez-vous","error");setAnimating(true);setTimeout(()=>setAnimating(false),400);setLoading(true);try{if(inWishlist&&reviewId){await deleteDoc(doc(db,"reviews",reviewId));toast("Retiré de la wishlist","info");}else{await addDoc(collection(db,"reviews"),{playId,userId:currentUser.uid,userPseudo:userProfile?.pseudo||"Anonyme",rating:0,comment:"",status:"a-voir",playTitle,playPlaywright,createdAt:serverTimestamp()});toast("Ajouté à la wishlist !","success");}}catch{toast("Erreur","error");}finally{setLoading(false);}};
+  return <button onClick={toggle} disabled={loading} className={animating?"heart-pop":""} style={{width:44,height:44,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:inWishlist?"rgba(185,28,28,.08)":"var(--cream2)",border:`1.5px solid ${inWishlist?"var(--red)":"var(--border)"}`,transition:"all .2s",flexShrink:0}}><Ic n="heart" s={20} c={inWishlist?"var(--red)":"var(--ink4)"} fill={inWishlist?"var(--red)":"none"}/></button>;
+};
+
+const deletePlayWithCleanup=async(playId:string)=>{const rs=await getDocs(query(collection(db,"reviews"),where("playId","==",playId)));for(const r of rs.docs){const cs=await getDocs(query(collection(db,"reviewComments"),where("reviewId","==",r.id)));for(const c of cs.docs)await deleteDoc(doc(db,"reviewComments",c.id));await deleteDoc(doc(db,"reviews",r.id));}await deleteDoc(doc(db,"plays",playId));};
+const isAvailableToday=(play:any)=>{if(!play?.availability?.startDate)return false;const{startDate,endDate,days}=play.availability;const today=new Date();if(today<new Date(startDate)||today>new Date(endDate))return false;return days?.includes(DAYS[today.getDay()===0?6:today.getDay()-1]);};
+const isAvailableOnDate=(play:any,dateStr:string)=>{if(!play?.availability?.startDate||!dateStr)return false;const{startDate,endDate,days}=play.availability;const d=new Date(dateStr);if(d<new Date(startDate)||d>new Date(endDate))return false;return days?.includes(DAYS[d.getDay()===0?6:d.getDay()-1]);};
 
 const ProfileStats = ({ reviews, playsMap }: any) => {
   const now=new Date();const monthStart=new Date(now.getFullYear(),now.getMonth(),1);
@@ -497,8 +546,8 @@ const ProfileStats = ({ reviews, playsMap }: any) => {
   const theaterCount:any={};allSeen.forEach((r:any)=>{const play=playsMap[r.playId];if(play?.theater){theaterCount[play.theater]=(theaterCount[play.theater]||0)+1;}});
   const topTheater=Object.entries(theaterCount).sort((a:any,b:any)=>b[1]-a[1])[0];
   const avgRating=allSeen.length>0?(allSeen.reduce((a:number,r:any)=>a+r.rating,0)/allSeen.length).toFixed(1):null;
-  const maxGenreCount=Object.values(genreCount).length>0?Math.max(...Object.values(genreCount) as number[]):1;
   const topGenres=Object.entries(genreCount).sort((a:any,b:any)=>b[1]-a[1]).slice(0,3);
+  const maxG=topGenres.length>0?(topGenres[0][1] as number):1;
   if(allSeen.length===0)return null;
   return(
     <div style={{marginBottom:32}}>
@@ -513,33 +562,18 @@ const ProfileStats = ({ reviews, playsMap }: any) => {
           </div>
         ))}
       </div>
-      {topGenres.length>0&&(
-        <div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:16,marginBottom:12,boxShadow:"var(--shadow-sm)"}}>
-          <div style={{fontSize:12,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:12}}>Genres favoris</div>
-          {topGenres.map(([genre,count]:any,i:number)=>(
-            <div key={i} style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:"var(--ink2)"}}>{genre}</span><span style={{fontSize:12,color:"var(--ink4)",fontWeight:600}}>{count} pièce{count>1?"s":""}</span></div>
-              <div style={{height:6,background:"var(--cream2)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${(count/maxGenreCount)*100}%`,background:"linear-gradient(90deg,var(--red),var(--red-dark))",borderRadius:3}}/></div>
-            </div>
-          ))}
-        </div>
-      )}
-      {topTheater&&(
-        <div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:14,display:"flex",alignItems:"center",gap:12,boxShadow:"var(--shadow-sm)"}}>
-          <div style={{width:40,height:40,borderRadius:"50%",background:"rgba(201,168,76,.12)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="location" s={18} c="var(--gold)"/></div>
-          <div><div style={{fontSize:11,fontWeight:600,color:"var(--ink4)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:2}}>Théâtre favori</div><div className="serif" style={{fontWeight:700,fontSize:15}}>{topTheater[0]}</div><div style={{fontSize:12,color:"var(--ink4)"}}>{topTheater[1] as number} visite{(topTheater[1] as number)>1?"s":""}</div></div>
-        </div>
-      )}
+      {topGenres.length>0&&<div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:16,marginBottom:12,boxShadow:"var(--shadow-sm)"}}><div style={{fontSize:12,fontWeight:600,color:"var(--ink3)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:12}}>Genres favoris</div>{topGenres.map(([genre,count]:any,i:number)=><div key={i} style={{marginBottom:10}}><div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}><span style={{fontSize:13,color:"var(--ink2)"}}>{genre}</span><span style={{fontSize:12,color:"var(--ink4)",fontWeight:600}}>{count} pièce{count>1?"s":""}</span></div><div style={{height:6,background:"var(--cream2)",borderRadius:3,overflow:"hidden"}}><div style={{height:"100%",width:`${(count/maxG)*100}%`,background:"linear-gradient(90deg,var(--red),var(--red-dark))",borderRadius:3}}/></div></div>)}</div>}
+      {topTheater&&<div style={{background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-md)",padding:14,display:"flex",alignItems:"center",gap:12,boxShadow:"var(--shadow-sm)"}}><div style={{width:40,height:40,borderRadius:"50%",background:"rgba(201,168,76,.12)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><Ic n="location" s={18} c="var(--gold)"/></div><div><div style={{fontSize:11,fontWeight:600,color:"var(--ink4)",textTransform:"uppercase" as const,letterSpacing:".06em",marginBottom:2}}>Théâtre favori</div><div className="serif" style={{fontWeight:700,fontSize:15}}>{topTheater[0]}</div><div style={{fontSize:12,color:"var(--ink4)"}}>{topTheater[1] as number} visite{(topTheater[1] as number)>1?"s":""}</div></div></div>}
     </div>
   );
 };
 
 const PlayDetail = ({ playId, currentUser, userProfile, onBack }: any) => {
-  const [play,setPlay]=useState<any>(null);const [reviews,setReviews]=useState<any[]>([]);const [myReview,setMyReview]=useState<any>(null);const [showReview,setShowReview]=useState(false);const [showEdit,setShowEdit]=useState(false);const [loading,setLoading]=useState(true);const [allTitles,setAllTitles]=useState<string[]>([]);
+  const [play,setPlay]=useState<any>(null);const [reviews,setReviews]=useState<any[]>([]);const [myReview,setMyReview]=useState<any>(null);const [showReview,setShowReview]=useState(false);const [showEdit,setShowEdit]=useState(false);const [loading,setLoading]=useState(true);const [allPlays,setAllPlays]=useState<any[]>([]);
   useEffect(()=>{
     const u1=onSnapshot(doc(db,"plays",playId),snap=>{setPlay(snap.exists()?{id:snap.id,...snap.data()}:null);setLoading(false);});
     const u2=onSnapshot(query(collection(db,"reviews"),where("playId","==",playId),where("status","==","vu"),orderBy("createdAt","desc")),snap=>{const revs=snap.docs.map(d=>({id:d.id,...d.data()}));setReviews(revs);if(currentUser)setMyReview(revs.find((r:any)=>r.userId===currentUser.uid)||null);});
-    getDocs(collection(db,"plays")).then(s=>setAllTitles(s.docs.map(d=>(d.data() as any).title).filter(Boolean)));
+    getDocs(collection(db,"plays")).then(s=>setAllPlays(s.docs.map(d=>({id:d.id,...d.data()}))));
     return()=>{u1();u2();};
   },[playId,currentUser]);
   const avg=reviews.length?(reviews.reduce((a:number,r:any)=>a+r.rating,0)/reviews.length).toFixed(1):null;
@@ -576,10 +610,10 @@ const PlayDetail = ({ playId, currentUser, userProfile, onBack }: any) => {
               </div>}
               <div style={{display:"flex",gap:10,flexWrap:"wrap",alignItems:"center"}}>
                 {currentUser&&<HeartButton playId={playId} playTitle={play.title} playPlaywright={play.playwright} currentUser={currentUser} userProfile={userProfile}/>}
-                {currentUser&&<button style={B.gold({fontSize:13})} onClick={()=>setShowReview(true)}><Ic n="star" s={14} c="#3D1F00" fill="#3D1F00"/>{myReview?"Modifier":"Donner mon avis"}</button>}
+                {currentUser&&<button style={B.gold({fontSize:13})} onClick={()=>setShowReview(true)}><Ic n="star" s={14} c="#3D1F00" fill="#3D1F00"/>{myReview?"Modifier mon avis":"Donner mon avis"}</button>}
                 {play.ticketmasterUrl&&<a href={play.ticketmasterUrl} target="_blank" rel="noopener noreferrer" style={{...B.soft({fontSize:13,background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:100,textDecoration:"none"})}}><Ic n="ticket" s={14} c="white"/>Réserver</a>}
                 {play.billetReducUrl&&<a href={play.billetReducUrl} target="_blank" rel="noopener noreferrer" style={{...B.soft({fontSize:13,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",color:"white",borderRadius:100,textDecoration:"none"})}}><Ic n="ticket" s={14} c="white"/>BilletRéduc</a>}
-                {currentUser&&myReview&&<button style={B.ghost({fontSize:13,color:"rgba(255,255,255,.7)",borderColor:"rgba(255,255,255,.3)"})} onClick={deleteReview}><Ic n="trash" s={14} c="rgba(255,255,255,.7)"/>Supprimer</button>}
+                {currentUser&&myReview&&<button style={B.ghost({fontSize:13,color:"rgba(255,255,255,.7)",borderColor:"rgba(255,255,255,.3)"})} onClick={deleteReview}><Ic n="trash" s={14} c="rgba(255,255,255,.7)"/>Suppr.</button>}
               </div>
               {currentUser&&<div style={{display:"flex",gap:8,marginTop:10}}>
                 <button style={{fontSize:12,color:"rgba(255,255,255,.5)",background:"transparent",textDecoration:"underline"}} onClick={()=>setShowEdit(true)}>Modifier</button>
@@ -596,31 +630,21 @@ const PlayDetail = ({ playId, currentUser, userProfile, onBack }: any) => {
         <section>
           <h3 className="serif" style={{fontSize:18,marginBottom:16}}>Avis ({reviews.length})</h3>
           {reviews.length===0?<div style={{textAlign:"center",padding:"40px 20px",background:"var(--white)",borderRadius:"var(--r-lg)",border:"1px solid var(--border)"}}><p style={{color:"var(--ink4)",fontSize:14}}>Aucun avis pour l'instant.</p></div>
-            :<div style={{display:"flex",flexDirection:"column",gap:12}}>
-              {reviews.map((r:any)=>(
-                <Card key={r.id} style={{padding:20,borderLeft:`3px solid ${r.userId===currentUser?.uid?"var(--gold)":"transparent"}`}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-                    <div style={{width:34,height:34,borderRadius:"50%",background:"var(--red)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"var(--gold)",flexShrink:0}}>{r.userPseudo?.charAt(0)?.toUpperCase()||"?"}</div>
-                    <div><div style={{fontWeight:600,fontSize:14}}>{r.userPseudo}</div><Stars value={r.rating} onChange={()=>{}} readonly size={13}/></div>
-                  </div>
-                  {r.comment&&<p style={{color:"var(--ink2)",fontSize:14,lineHeight:1.65,paddingLeft:46,marginBottom:6}}>{r.comment}</p>}
-                  <div style={{paddingLeft:46}}><ReviewComments reviewId={r.id} reviewOwnerId={r.userId} currentUser={currentUser} userProfile={userProfile}/></div>
-                </Card>
-              ))}
-            </div>}
+            :<div style={{display:"flex",flexDirection:"column",gap:12}}>{reviews.map((r:any)=>(<Card key={r.id} style={{padding:20,borderLeft:`3px solid ${r.userId===currentUser?.uid?"var(--gold)":"transparent"}`}}><div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}><div style={{width:34,height:34,borderRadius:"50%",background:"var(--red)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"var(--gold)",flexShrink:0}}>{r.userPseudo?.charAt(0)?.toUpperCase()||"?"}</div><div><div style={{fontWeight:600,fontSize:14}}>{r.userPseudo}</div><Stars value={r.rating} onChange={()=>{}} readonly size={13}/></div></div>{r.comment&&<p style={{color:"var(--ink2)",fontSize:14,lineHeight:1.65,paddingLeft:46,marginBottom:6}}>{r.comment}</p>}<div style={{paddingLeft:46}}><ReviewComments reviewId={r.id} reviewOwnerId={r.userId} currentUser={currentUser} userProfile={userProfile}/></div></Card>))}</div>}
         </section>
       </div>
       {showReview&&<ReviewModal play={play} existing={myReview} onClose={()=>setShowReview(false)} onSave={saveReview}/>}
-      {showEdit&&<PlayFormModal play={play} existingTitles={allTitles} onClose={()=>setShowEdit(false)} onSave={async(form:any)=>{await updateDoc(doc(db,"plays",playId),form);toast("Pièce modifiée !","success");}}/>}
+      {showEdit&&<PlayFormModal play={play} existingPlays={allPlays} onClose={()=>setShowEdit(false)} onSave={async(form:any)=>{await updateDoc(doc(db,"plays",playId),form);toast("Pièce modifiée !","success");}}/>}
     </div>
   );
 };
 
 const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
-  const [plays,setPlays]=useState<any[]>([]);const [search,setSearch]=useState("");const [showAdd,setShowAdd]=useState(false);const [loading,setLoading]=useState(true);const [avgMap,setAvgMap]=useState<any>({});const [showFilters,setShowFilters]=useState(false);const [filterDate,setFilterDate]=useState("");const [filterUnder26,setFilterUnder26]=useState(false);const [filterNotSeen,setFilterNotSeen]=useState(false);const [sortBy,setSortBy]=useState("title");const [suggestions,setSuggestions]=useState<string[]>([]);
+  const [plays,setPlays]=useState<any[]>([]);const [search,setSearch]=useState("");const [showAdd,setShowAdd]=useState(false);const [loading,setLoading]=useState(true);const [avgMap,setAvgMap]=useState<any>({});const [showFilters,setShowFilters]=useState(false);const [filterDate,setFilterDate]=useState("");const [filterUnder26,setFilterUnder26]=useState(false);const [filterNotSeen,setFilterNotSeen]=useState(false);const [sortBy,setSortBy]=useState("title");const [suggestions,setSuggestions]=useState<string[]>([]);const [showSug,setShowSug]=useState(false);const sugRef=useRef<HTMLDivElement>(null);
+  useEffect(()=>{const h=(e:MouseEvent)=>{if(sugRef.current&&!sugRef.current.contains(e.target as Node))setShowSug(false);};document.addEventListener("mousedown",h);return()=>document.removeEventListener("mousedown",h);},[]);
   useEffect(()=>{const unsub=onSnapshot(collection(db,"plays"),snap=>{setPlays(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});return unsub;},[]);
   useEffect(()=>{const unsub=onSnapshot(collection(db,"reviews"),snap=>{const map:any={};snap.docs.forEach(d=>{const r:any=d.data();if(r.status==="vu"&&r.rating>0){if(!map[r.playId])map[r.playId]=[];map[r.playId].push(r.rating);}});const avgs:any={};Object.entries(map).forEach(([id,ratings]:any)=>{avgs[id]=(ratings.reduce((a:number,b:number)=>a+b,0)/ratings.length).toFixed(1);});setAvgMap(avgs);});return unsub;},[]);
-  const handleSearch=(val:string)=>{setSearch(val);if(val.length>=2)setSuggestions(plays.filter(p=>p.title?.toLowerCase().includes(val.toLowerCase())).map(p=>p.title).slice(0,5));else setSuggestions([]);};
+  const handleSearch=(val:string)=>{setSearch(val);if(val.length>=2){const m=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(val.toLowerCase())));setSuggestions(m.map((p:any)=>p.title).filter(Boolean).slice(0,6));setShowSug(m.length>0);}else{setSuggestions([]);setShowSug(false);}};
   const seenPlayIds=new Set((userReviews||[]).filter((r:any)=>r.status==="vu").map((r:any)=>r.playId));
   let filtered=plays.filter(p=>[p.title,p.playwright,p.genre,p.theater].some((v:any)=>v?.toLowerCase().includes(search.toLowerCase())));
   if(filterDate)filtered=filtered.filter(p=>isAvailableOnDate(p,filterDate));
@@ -636,136 +660,55 @@ const CataloguePage = ({ currentUser, onSelectPlay, userReviews }: any) => {
             {currentUser&&<button style={B.gold({fontSize:13})} onClick={()=>setShowAdd(true)}><Ic n="plus" s={16} c="#3D1F00"/>Ajouter</button>}
           </div>
           <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-            <div style={{position:"relative",flex:1,minWidth:200}}>
+            <div ref={sugRef} style={{position:"relative",flex:1,minWidth:200}}>
               <div style={{position:"absolute",left:14,top:"50%",transform:"translateY(-50%)"}}><Ic n="search" s={16} c="rgba(255,255,255,.5)"/></div>
-              <input value={search} onChange={e=>handleSearch(e.target.value)} placeholder="Titre, auteur, genre…" style={{paddingLeft:42,background:"rgba(255,255,255,.12)",border:"1.5px solid rgba(255,255,255,.2)",color:"white",borderRadius:100}}/>
-              {suggestions.length>0&&(<div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:100}}>{suggestions.map((s:string,i:number)=>(<div key={i} onClick={()=>{setSearch(s);setSuggestions([]);}} style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}>{s}</div>))}</div>)}
+              <input value={search} onChange={e=>handleSearch(e.target.value)} onFocus={()=>suggestions.length>0&&setShowSug(true)} placeholder="Titre, auteur, genre, théâtre…" style={{paddingLeft:42,background:"rgba(255,255,255,.12)",border:"1.5px solid rgba(255,255,255,.2)",color:"white",borderRadius:100}}/>
+              {showSug&&suggestions.length>0&&(<div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:"var(--white)",border:"1.5px solid var(--border)",borderRadius:"var(--r-md)",boxShadow:"var(--shadow-lg)",zIndex:100}}>{suggestions.map((s:string,i:number)=>(<div key={i} onClick={()=>{setSearch(s);setShowSug(false);}} style={{padding:"10px 14px",fontSize:14,cursor:"pointer",borderBottom:"1px solid var(--cream2)",color:"var(--ink)",display:"flex",alignItems:"center",gap:8}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.background="var(--cream)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.background="transparent"}><Ic n="search" s={13} c="var(--ink4)"/>{s}</div>))}</div>)}
             </div>
             <button style={{...B.soft({fontSize:13,background:showFilters?"rgba(201,168,76,.25)":"rgba(255,255,255,.15)",border:`1px solid ${showFilters?"rgba(201,168,76,.5)":"rgba(255,255,255,.25)"}`,color:"white",borderRadius:100})}} onClick={()=>setShowFilters(p=>!p)}>
               <Ic n="filter" s={15} c="white"/>Filtres{(filterDate||filterUnder26||filterNotSeen)&&<span style={{background:"var(--gold)",color:"#3D1F00",width:16,height:16,borderRadius:"50%",fontSize:10,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{[filterDate,filterUnder26,filterNotSeen].filter(Boolean).length}</span>}
             </button>
           </div>
-          {showFilters&&(<div style={{background:"rgba(0,0,0,.25)",borderRadius:"var(--r-lg)",padding:18,marginTop:12}}>
-            <div style={{display:"flex",flexWrap:"wrap",gap:24,alignItems:"flex-start"}}>
-              <div><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Trier par</p><div style={{display:"flex",gap:6}}>{[["title","A–Z"],["rating","Note"],["price","Prix"]].map(([v,l])=>(<button key={v} onClick={()=>setSortBy(v)} style={{padding:"6px 14px",borderRadius:100,fontSize:12,fontWeight:500,background:sortBy===v?"white":"transparent",color:sortBy===v?"var(--red)":"rgba(255,255,255,.7)",border:`1px solid ${sortBy===v?"white":"rgba(255,255,255,.3)"}`}}>{l}</button>))}</div></div>
-              <div><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Disponible le</p><div style={{display:"flex",alignItems:"center",gap:8}}><input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:"var(--r-sm)",padding:"7px 10px",fontSize:13,width:"auto"}}/>{filterDate&&<button onClick={()=>setFilterDate("")} style={{background:"transparent",color:"rgba(255,255,255,.5)",fontSize:12,textDecoration:"underline"}}>Effacer</button>}</div></div>
-              <div style={{display:"flex",flexDirection:"column",gap:10}}><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const}}>Filtres</p><CheckboxFilter label="Offre moins de 26 ans" checked={filterUnder26} onChange={setFilterUnder26}/>{currentUser&&<CheckboxFilter label="Pas encore vues" checked={filterNotSeen} onChange={setFilterNotSeen}/>}</div>
-            </div>
-          </div>)}
+          {showFilters&&(<div style={{background:"rgba(0,0,0,.25)",borderRadius:"var(--r-lg)",padding:18,marginTop:12}}><div style={{display:"flex",flexWrap:"wrap",gap:24,alignItems:"flex-start"}}><div><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Trier par</p><div style={{display:"flex",gap:6}}>{[["title","A–Z"],["rating","Note"],["price","Prix"]].map(([v,l])=>(<button key={v} onClick={()=>setSortBy(v)} style={{padding:"6px 14px",borderRadius:100,fontSize:12,fontWeight:500,background:sortBy===v?"white":"transparent",color:sortBy===v?"var(--red)":"rgba(255,255,255,.7)",border:`1px solid ${sortBy===v?"white":"rgba(255,255,255,.3)"}`}}>{l}</button>))}</div></div><div><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:8}}>Disponible le</p><div style={{display:"flex",alignItems:"center",gap:8}}><input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{background:"rgba(255,255,255,.12)",border:"1px solid rgba(255,255,255,.3)",color:"white",borderRadius:"var(--r-sm)",padding:"7px 10px",fontSize:13,width:"auto"}}/>{filterDate&&<button onClick={()=>setFilterDate("")} style={{background:"transparent",color:"rgba(255,255,255,.5)",fontSize:12,textDecoration:"underline"}}>Effacer</button>}</div></div><div style={{display:"flex",flexDirection:"column",gap:10}}><p style={{color:"rgba(255,255,255,.6)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const}}>Filtres</p><CheckboxFilter label="Offre moins de 26 ans" checked={filterUnder26} onChange={setFilterUnder26}/>{currentUser&&<CheckboxFilter label="Pas encore vues" checked={filterNotSeen} onChange={setFilterNotSeen}/>}</div></div></div>)}
         </div>
       </div>
       <div style={{maxWidth:1100,margin:"0 auto",padding:24}}>
-        {loading?<div style={{textAlign:"center",padding:80}}>Chargement…</div>
-          :filtered.length===0?<Empty icon="search" text="Aucune pièce trouvée." sub="Essayez d'autres filtres."/>
+        {loading?<div style={{textAlign:"center",padding:80}}>Chargement…</div>:filtered.length===0?<Empty icon="search" text="Aucune pièce trouvée." sub="Essayez d'autres termes ou filtres."/>
           :<div className="grid-plays" style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:20}}>
-            {filtered.map((play:any)=>(
-              <Card key={play.id} hover onClick={()=>onSelectPlay(play.id)}>
-                <div style={{position:"relative"}}><Poster play={play} size={160}/>{isAvailableToday(play)&&<span style={{position:"absolute",top:8,left:8,background:"rgba(46,160,67,.9)",color:"white",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>Ce soir</span>}{play.under26Available&&<span style={{position:"absolute",top:8,right:8,background:"rgba(201,168,76,.9)",color:"#3D1F00",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>−26ans</span>}</div>
-                <div style={{padding:"12px 14px 14px"}}><div className="serif" style={{fontWeight:700,fontSize:13,lineHeight:1.35,marginBottom:3}}>{play.title}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:4}}>{play.playwright}</div>{play.priceMin&&<div style={{color:"var(--ink3)",fontSize:11,marginBottom:4}}>À partir de {play.priceMin}€</div>}{avgMap[play.id]?<div style={{display:"flex",alignItems:"center",gap:5}}><Stars value={Math.round(avgMap[play.id])} onChange={()=>{}} readonly size={12}/><span style={{fontSize:11,color:"var(--red)",fontWeight:600}}>{avgMap[play.id]}</span></div>:<span style={{fontSize:11,color:"var(--ink4)"}}>Pas encore noté</span>}</div>
-              </Card>
-            ))}
+            {filtered.map((play:any)=>(<Card key={play.id} hover onClick={()=>onSelectPlay(play.id)}><div style={{position:"relative"}}><Poster play={play} size={160}/>{isAvailableToday(play)&&<span style={{position:"absolute",top:8,left:8,background:"rgba(46,160,67,.9)",color:"white",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>Ce soir</span>}{play.under26Available&&<span style={{position:"absolute",top:8,right:8,background:"rgba(201,168,76,.9)",color:"#3D1F00",fontSize:10,fontWeight:700,padding:"2px 8px",borderRadius:100}}>−26ans</span>}</div><div style={{padding:"12px 14px 14px"}}><div className="serif" style={{fontWeight:700,fontSize:13,lineHeight:1.35,marginBottom:3}}>{play.title}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:4}}>{play.playwright}</div>{play.priceMin&&<div style={{color:"var(--ink3)",fontSize:11,marginBottom:4}}>À partir de {play.priceMin}€</div>}{avgMap[play.id]?<div style={{display:"flex",alignItems:"center",gap:5}}><Stars value={Math.round(avgMap[play.id])} onChange={()=>{}} readonly size={12}/><span style={{fontSize:11,color:"var(--red)",fontWeight:600}}>{avgMap[play.id]}</span></div>:<span style={{fontSize:11,color:"var(--ink4)"}}>Pas encore noté</span>}</div></Card>))}
           </div>}
       </div>
-      {showAdd&&<PlayFormModal existingTitles={plays.map(p=>p.title).filter(Boolean)} onClose={()=>setShowAdd(false)} onSave={async(form:any)=>{await addDoc(collection(db,"plays"),{...form,createdAt:serverTimestamp()});toast("Pièce ajoutée !","success");}}/>}
+      {showAdd&&<PlayFormModal existingPlays={plays} onClose={()=>setShowAdd(false)} onSave={async(form:any)=>{await addDoc(collection(db,"plays"),{...form,createdAt:serverTimestamp()});toast("Pièce ajoutée !","success");}}/>}
     </div>
   );
 };
 
 const RankingPage = ({ onSelectPlay }: any) => {
   const [ranking,setRanking]=useState<any[]>([]);const [loading,setLoading]=useState(true);
-  useEffect(()=>{
-    const weekAgo=new Date();weekAgo.setDate(weekAgo.getDate()-7);
-    const unsub=onSnapshot(collection(db,"reviews"),async snap=>{
-      const recent=snap.docs.map(d=>({id:d.id,...d.data()} as any)).filter(r=>r.status==="vu"&&r.rating>0&&r.createdAt?.toDate&&r.createdAt.toDate()>=weekAgo);
-      const map:any={};recent.forEach(r=>{if(!map[r.playId])map[r.playId]={ratings:[],playTitle:r.playTitle,playPlaywright:r.playPlaywright};map[r.playId].ratings.push(r.rating);});
-      const ranked=Object.entries(map).map(([playId,data]:any)=>({playId,avg:data.ratings.reduce((a:number,b:number)=>a+b,0)/data.ratings.length,count:data.ratings.length,playTitle:data.playTitle,playPlaywright:data.playPlaywright})).sort((a,b)=>b.avg-a.avg||b.count-a.count).slice(0,10);
-      const withDetails=await Promise.all(ranked.map(async r=>{try{const s=await getDoc(doc(db,"plays",r.playId));return{...r,play:s.exists()?{id:s.id,...s.data()}:null};}catch{return{...r,play:null};}}));
-      setRanking(withDetails);setLoading(false);
-    });
-    return unsub;
-  },[]);
-  const medalColors=["#C9A84C","#9B9B9B","#CD7F32"];
-  return(
-    <div style={{minHeight:"100vh",background:"var(--cream)"}}>
-      <div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}><div style={{maxWidth:800,margin:"0 auto"}}><h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Classement</h1><p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Top 10 de la semaine</p></div></div>
-      <div style={{maxWidth:800,margin:"0 auto",padding:24}}>
-        {loading?<div style={{textAlign:"center",padding:60}}>Chargement…</div>:ranking.length===0?<Empty icon="trophy" text="Pas encore assez d'avis cette semaine."/>
-          :<div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {ranking.map((item:any,i:number)=>(
-              <Card key={item.playId} hover onClick={()=>onSelectPlay(item.playId)} style={{padding:0,overflow:"hidden"}}>
-                <div style={{display:"flex",alignItems:"center"}}>
-                  <div style={{width:56,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",minHeight:80,background:"var(--cream2)"}}>
-                    {i<3?<svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={medalColors[i]} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>:<span style={{fontWeight:700,fontSize:17,color:"var(--ink4)"}}>#{i+1}</span>}
-                  </div>
-                  {item.play&&<div style={{flexShrink:0}}><Poster play={item.play} size={52}/></div>}
-                  <div style={{flex:1,padding:"14px 16px"}}><div className="serif" style={{fontWeight:700,fontSize:15,marginBottom:3}}>{item.playTitle}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:6}}>{item.playPlaywright}</div><div style={{display:"flex",alignItems:"center",gap:8}}><Stars value={Math.round(item.avg)} onChange={()=>{}} readonly size={14}/><span style={{fontWeight:700,color:"var(--red)",fontSize:14}}>{item.avg.toFixed(1)}</span><span style={{color:"var(--ink4)",fontSize:12}}>({item.count} avis)</span></div></div>
-                </div>
-              </Card>
-            ))}
-          </div>}
-      </div>
-    </div>
-  );
+  useEffect(()=>{const weekAgo=new Date();weekAgo.setDate(weekAgo.getDate()-7);const unsub=onSnapshot(collection(db,"reviews"),async snap=>{const recent=snap.docs.map(d=>({id:d.id,...d.data()} as any)).filter(r=>r.status==="vu"&&r.rating>0&&r.createdAt?.toDate&&r.createdAt.toDate()>=weekAgo);const map:any={};recent.forEach(r=>{if(!map[r.playId])map[r.playId]={ratings:[],playTitle:r.playTitle,playPlaywright:r.playPlaywright};map[r.playId].ratings.push(r.rating);});const ranked=Object.entries(map).map(([playId,data]:any)=>({playId,avg:data.ratings.reduce((a:number,b:number)=>a+b,0)/data.ratings.length,count:data.ratings.length,playTitle:data.playTitle,playPlaywright:data.playPlaywright})).sort((a,b)=>b.avg-a.avg||b.count-a.count).slice(0,10);const withDetails=await Promise.all(ranked.map(async r=>{try{const s=await getDoc(doc(db,"plays",r.playId));return{...r,play:s.exists()?{id:s.id,...s.data()}:null};}catch{return{...r,play:null};}}));setRanking(withDetails);setLoading(false);});return unsub;},[]);
+  const mc=["#C9A84C","#9B9B9B","#CD7F32"];
+  return(<div style={{minHeight:"100vh",background:"var(--cream)"}}><div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}><div style={{maxWidth:800,margin:"0 auto"}}><h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Classement</h1><p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Top 10 de la semaine</p></div></div><div style={{maxWidth:800,margin:"0 auto",padding:24}}>{loading?<div style={{textAlign:"center",padding:60}}>Chargement…</div>:ranking.length===0?<Empty icon="trophy" text="Pas encore assez d'avis cette semaine."/>:<div style={{display:"flex",flexDirection:"column",gap:12}}>{ranking.map((item:any,i:number)=>(<Card key={item.playId} hover onClick={()=>onSelectPlay(item.playId)} style={{padding:0,overflow:"hidden"}}><div style={{display:"flex",alignItems:"center"}}><div style={{width:56,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",minHeight:80,background:"var(--cream2)"}}>{i<3?<svg width={28} height={28} viewBox="0 0 24 24" fill="none" stroke={mc[i]} strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="8" r="6"/><path d="M8.21 13.89L7 23l5-3 5 3-1.21-9.12"/></svg>:<span style={{fontWeight:700,fontSize:17,color:"var(--ink4)"}}>#{i+1}</span>}</div>{item.play&&<div style={{flexShrink:0}}><Poster play={item.play} size={52}/></div>}<div style={{flex:1,padding:"14px 16px"}}><div className="serif" style={{fontWeight:700,fontSize:15,marginBottom:3}}>{item.playTitle}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:6}}>{item.playPlaywright}</div><div style={{display:"flex",alignItems:"center",gap:8}}><Stars value={Math.round(item.avg)} onChange={()=>{}} readonly size={14}/><span style={{fontWeight:700,color:"var(--red)",fontSize:14}}>{item.avg.toFixed(1)}</span><span style={{color:"var(--ink4)",fontSize:12}}>({item.count} avis)</span></div></div></div></Card>))}</div>}</div></div>);
 };
 
 const WishlistPage = ({ currentUser, onSelectPlay }: any) => {
   const [reviews,setReviews]=useState<any[]>([]);const [loading,setLoading]=useState(true);
   useEffect(()=>{if(!currentUser){setLoading(false);return;}const unsub=onSnapshot(query(collection(db,"reviews"),where("userId","==",currentUser.uid),where("status","==","a-voir"),orderBy("createdAt","desc")),snap=>{setReviews(snap.docs.map(d=>({id:d.id,...d.data()})));setLoading(false);});return unsub;},[currentUser]);
-  return(
-    <div style={{minHeight:"100vh",background:"var(--cream)"}}>
-      <div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}><div style={{maxWidth:800,margin:"0 auto"}}><h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Wishlist</h1><p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Les pièces que vous souhaitez voir</p></div></div>
-      <div style={{maxWidth:800,margin:"0 auto",padding:24}}>
-        {!currentUser?<Empty icon="wishlist" text="Connectez-vous pour voir votre wishlist."/>:loading?<div style={{textAlign:"center",padding:60}}>Chargement…</div>:reviews.length===0?<Empty icon="wishlist" text="Votre wishlist est vide." sub="Appuyez sur le ♥ d'une pièce pour l'ajouter !"/>
-          :<div style={{display:"flex",flexDirection:"column",gap:12}}>{reviews.map((r:any)=>(<Card key={r.id} hover onClick={()=>onSelectPlay(r.playId)} style={{padding:18,display:"flex",gap:14,alignItems:"center"}}><div style={{flex:1}}><div className="serif" style={{fontWeight:700,fontSize:15,marginBottom:3}}>{r.playTitle}</div><div style={{color:"var(--ink4)",fontSize:13}}>{r.playPlaywright}</div></div><Ic n="heart" s={18} c="var(--red)" fill="var(--red)"/></Card>))}</div>}
-      </div>
-    </div>
-  );
+  return(<div style={{minHeight:"100vh",background:"var(--cream)"}}><div style={{background:"linear-gradient(180deg,var(--red-deeper) 0%,var(--red) 100%)",padding:"32px 24px 28px"}}><div style={{maxWidth:800,margin:"0 auto"}}><h1 className="serif" style={{fontSize:28,color:"white",marginBottom:4}}>Wishlist</h1><p style={{color:"rgba(255,255,255,.6)",fontSize:14}}>Les pièces que vous souhaitez voir</p></div></div><div style={{maxWidth:800,margin:"0 auto",padding:24}}>{!currentUser?<Empty icon="wishlist" text="Connectez-vous pour voir votre wishlist."/>:loading?<div style={{textAlign:"center",padding:60}}>Chargement…</div>:reviews.length===0?<Empty icon="wishlist" text="Votre wishlist est vide." sub="Appuyez sur le ♥ d'une pièce pour l'ajouter !"/>:<div style={{display:"flex",flexDirection:"column",gap:12}}>{reviews.map((r:any)=>(<Card key={r.id} hover onClick={()=>onSelectPlay(r.playId)} style={{padding:18,display:"flex",gap:14,alignItems:"center"}}><div style={{flex:1}}><div className="serif" style={{fontWeight:700,fontSize:15,marginBottom:3}}>{r.playTitle}</div><div style={{color:"var(--ink4)",fontSize:13}}>{r.playPlaywright}</div></div><Ic n="heart" s={18} c="var(--red)" fill="var(--red)"/></Card>))}</div>}</div></div>);
 };
 
 const AccountSettingsModal = ({ currentUser, onClose }: any) => {
   const [tab,setTab]=useState<"password"|"delete">("password");
   const [currentPwd,setCurrentPwd]=useState("");const [newPwd,setNewPwd]=useState("");const [confirmPwd,setConfirmPwd]=useState("");const [deletePwd,setDeletePwd]=useState("");const [loading,setLoading]=useState(false);
-  const handleChangePassword=async()=>{
-    if(!currentPwd||!newPwd||!confirmPwd)return toast("Remplissez tous les champs","error");
-    if(newPwd!==confirmPwd)return toast("Les mots de passe ne correspondent pas","error");
-    if(newPwd.length<6)return toast("Min. 6 caractères","error");
-    setLoading(true);
-    try{const cred=EmailAuthProvider.credential(currentUser.email,currentPwd);await reauthenticateWithCredential(currentUser,cred);await updatePassword(currentUser,newPwd);toast("Mot de passe modifié !","success");onClose();}
-    catch(e:any){if(e.code==="auth/wrong-password"||e.code==="auth/invalid-credential")toast("Mot de passe actuel incorrect","error");else toast("Erreur","error");}
-    finally{setLoading(false);}
-  };
-  const handleDeleteAccount=async()=>{
-    if(!deletePwd)return toast("Entrez votre mot de passe","error");
-    if(!window.confirm("Supprimer définitivement votre compte ? Irréversible."))return;
-    setLoading(true);
-    try{
-      const cred=EmailAuthProvider.credential(currentUser.email,deletePwd);await reauthenticateWithCredential(currentUser,cred);
-      const reviewsSnap=await getDocs(query(collection(db,"reviews"),where("userId","==",currentUser.uid)));
-      for(const r of reviewsSnap.docs)await deleteDoc(doc(db,"reviews",r.id));
-      await deleteDoc(doc(db,"users",currentUser.uid));await deleteUser(currentUser);
-      toast("Compte supprimé","info");onClose();
-    }catch(e:any){if(e.code==="auth/wrong-password"||e.code==="auth/invalid-credential")toast("Mot de passe incorrect","error");else toast("Erreur","error");}
-    finally{setLoading(false);}
-  };
+  const handleChangePassword=async()=>{if(!currentPwd||!newPwd||!confirmPwd)return toast("Remplissez tous les champs","error");if(newPwd!==confirmPwd)return toast("Les mots de passe ne correspondent pas","error");if(newPwd.length<6)return toast("Min. 6 caractères","error");setLoading(true);try{const cred=EmailAuthProvider.credential(currentUser.email,currentPwd);await reauthenticateWithCredential(currentUser,cred);await updatePassword(currentUser,newPwd);toast("Mot de passe modifié !","success");onClose();}catch(e:any){if(e.code==="auth/wrong-password"||e.code==="auth/invalid-credential")toast("Mot de passe actuel incorrect","error");else toast("Erreur","error");}finally{setLoading(false);}};
+  const handleDeleteAccount=async()=>{if(!deletePwd)return toast("Entrez votre mot de passe","error");if(!window.confirm("Supprimer définitivement votre compte ? Irréversible."))return;setLoading(true);try{const cred=EmailAuthProvider.credential(currentUser.email,deletePwd);await reauthenticateWithCredential(currentUser,cred);const rs=await getDocs(query(collection(db,"reviews"),where("userId","==",currentUser.uid)));for(const r of rs.docs)await deleteDoc(doc(db,"reviews",r.id));await deleteDoc(doc(db,"users",currentUser.uid));await deleteUser(currentUser);toast("Compte supprimé","info");onClose();}catch(e:any){if(e.code==="auth/wrong-password"||e.code==="auth/invalid-credential")toast("Mot de passe incorrect","error");else toast("Erreur","error");}finally{setLoading(false);}};
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,.5)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000,padding:16,backdropFilter:"blur(4px)"}} onClick={e=>e.target===e.currentTarget&&onClose()}>
       <div style={{background:"var(--white)",borderRadius:"var(--r-xl)",width:"100%",maxWidth:440,boxShadow:"var(--shadow-lg)"}} className="fade">
         <div style={{padding:"24px 28px 0",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:20}}><h2 className="serif" style={{fontSize:20}}>Paramètres du compte</h2><button style={B.icon(false)} onClick={onClose}><Ic n="close" s={16} c="var(--ink3)"/></button></div>
-        <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:24}}>
-          {[["password","Mot de passe"],["delete","Supprimer"]].map(([v,l])=>(<button key={v} onClick={()=>setTab(v as any)} style={{flex:1,padding:"12px",background:"transparent",color:tab===v?"var(--red)":"var(--ink4)",border:"none",borderBottom:`2px solid ${tab===v?"var(--red)":"transparent"}`,fontSize:14,fontWeight:tab===v?600:400}}>{l}</button>))}
-        </div>
+        <div style={{display:"flex",borderBottom:"1px solid var(--border)",marginBottom:24}}>{[["password","Mot de passe"],["delete","Supprimer"]].map(([v,l])=>(<button key={v} onClick={()=>setTab(v as any)} style={{flex:1,padding:"12px",background:"transparent",color:tab===v?"var(--red)":"var(--ink4)",border:"none",borderBottom:`2px solid ${tab===v?"var(--red)":"transparent"}`,fontSize:14,fontWeight:tab===v?600:400}}>{l}</button>))}</div>
         <div style={{padding:"0 28px 28px"}}>
-          {tab==="password"&&<>
-            <FRow><Lbl>Mot de passe actuel</Lbl><input value={currentPwd} onChange={e=>setCurrentPwd(e.target.value)} type="password" placeholder="••••••••"/></FRow>
-            <FRow><Lbl>Nouveau mot de passe</Lbl><input value={newPwd} onChange={e=>setNewPwd(e.target.value)} type="password" placeholder="Min. 6 caractères"/></FRow>
-            <FRow><Lbl>Confirmer</Lbl><input value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} type="password" placeholder="••••••••"/></FRow>
-            <button style={B.gold({width:"100%",justifyContent:"center",padding:12})} onClick={handleChangePassword} disabled={loading}>{loading?"…":"Modifier le mot de passe"}</button>
-          </>}
-          {tab==="delete"&&<>
-            <div style={{background:"rgba(220,38,38,.06)",border:"1px solid rgba(220,38,38,.2)",borderRadius:"var(--r-sm)",padding:14,marginBottom:20,display:"flex",gap:10}}><Ic n="warning" s={20} c="#DC2626"/><p style={{fontSize:13,color:"#DC2626",lineHeight:1.5}}>La suppression est <b>irréversible</b>. Toutes vos données seront effacées.</p></div>
-            <FRow><Lbl>Confirmez votre mot de passe</Lbl><input value={deletePwd} onChange={e=>setDeletePwd(e.target.value)} type="password" placeholder="••••••••"/></FRow>
-            <button style={{...B.danger({width:"100%",justifyContent:"center",padding:12})}} onClick={handleDeleteAccount} disabled={loading}>{loading?"…":"Supprimer mon compte"}</button>
-          </>}
+          {tab==="password"&&<><FRow><Lbl>Mot de passe actuel</Lbl><input value={currentPwd} onChange={e=>setCurrentPwd(e.target.value)} type="password" placeholder="••••••••"/></FRow><FRow><Lbl>Nouveau mot de passe</Lbl><input value={newPwd} onChange={e=>setNewPwd(e.target.value)} type="password" placeholder="Min. 6 caractères"/></FRow><FRow><Lbl>Confirmer</Lbl><input value={confirmPwd} onChange={e=>setConfirmPwd(e.target.value)} type="password" placeholder="••••••••"/></FRow><button style={B.gold({width:"100%",justifyContent:"center",padding:12})} onClick={handleChangePassword} disabled={loading}>{loading?"…":"Modifier le mot de passe"}</button></>}
+          {tab==="delete"&&<><div style={{background:"rgba(220,38,38,.06)",border:"1px solid rgba(220,38,38,.2)",borderRadius:"var(--r-sm)",padding:14,marginBottom:20,display:"flex",gap:10}}><Ic n="warning" s={20} c="#DC2626"/><p style={{fontSize:13,color:"#DC2626",lineHeight:1.5}}>La suppression est <b>irréversible</b>.</p></div><FRow><Lbl>Confirmez votre mot de passe</Lbl><input value={deletePwd} onChange={e=>setDeletePwd(e.target.value)} type="password" placeholder="••••••••"/></FRow><button style={{...B.danger({width:"100%",justifyContent:"center",padding:12})}} onClick={handleDeleteAccount} disabled={loading}>{loading?"…":"Supprimer mon compte"}</button></>}
         </div>
       </div>
     </div>
@@ -776,30 +719,18 @@ const AuthPage = ({ onSuccess }: any) => {
   const [mode,setMode]=useState<"login"|"register"|"reset">("login");
   const [form,setForm]=useState({email:"",password:"",pseudo:""});const [loading,setLoading]=useState(false);const [resetSent,setResetSent]=useState(false);
   const set=(k:string,v:string)=>setForm(p=>({...p,[k]:v}));
-  const handleSubmit=async()=>{
-    setLoading(true);
-    try{
-      if(mode==="reset"){await sendPasswordResetEmail(auth,form.email);setResetSent(true);toast("Email envoyé !","success");}
-      else if(mode==="login"){await signInWithEmailAndPassword(auth,form.email,form.password);toast("Bienvenue !","success");onSuccess?.();}
-      else{if(!form.pseudo.trim())return toast("Choisissez un pseudo","error");const cred=await createUserWithEmailAndPassword(auth,form.email,form.password);await updateProfile(cred.user,{displayName:form.pseudo});await setDoc(doc(db,"users",cred.user.uid),{pseudo:form.pseudo,email:form.email,photoURL:"",bio:"",friends:[],createdAt:serverTimestamp()});toast("Compte créé !","success");onSuccess?.();}
-    }catch(e:any){const msgs:any={"auth/email-already-in-use":"Email déjà utilisé","auth/invalid-email":"Email invalide","auth/wrong-password":"Mot de passe incorrect","auth/user-not-found":"Utilisateur introuvable","auth/weak-password":"Min. 6 caractères","auth/invalid-credential":"Email ou mot de passe incorrect"};toast(msgs[e.code]||e.message,"error");}
-    finally{setLoading(false);}
-  };
+  const handleSubmit=async()=>{setLoading(true);try{if(mode==="reset"){await sendPasswordResetEmail(auth,form.email);setResetSent(true);toast("Email envoyé !","success");}else if(mode==="login"){await signInWithEmailAndPassword(auth,form.email,form.password);toast("Bienvenue !","success");onSuccess?.();}else{if(!form.pseudo.trim())return toast("Choisissez un pseudo","error");const cred=await createUserWithEmailAndPassword(auth,form.email,form.password);await updateProfile(cred.user,{displayName:form.pseudo});await setDoc(doc(db,"users",cred.user.uid),{pseudo:form.pseudo,email:form.email,photoURL:"",bio:"",friends:[],createdAt:serverTimestamp()});toast("Compte créé !","success");onSuccess?.();}}catch(e:any){const msgs:any={"auth/email-already-in-use":"Email déjà utilisé","auth/invalid-email":"Email invalide","auth/wrong-password":"Mot de passe incorrect","auth/user-not-found":"Utilisateur introuvable","auth/weak-password":"Min. 6 caractères","auth/invalid-credential":"Email ou mot de passe incorrect"};toast(msgs[e.code]||e.message,"error");}finally{setLoading(false);}};
   return(
     <div style={{padding:24,maxWidth:420,margin:"0 auto"}}>
       <div style={{textAlign:"center",marginBottom:28}}><LogoMark size={60}/><h2 className="serif" style={{fontSize:22,marginTop:12,marginBottom:4}}>MyTheatre</h2><p style={{color:"var(--ink4)",fontSize:14}}>Connectez-vous pour accéder à votre profil</p></div>
       {mode==="reset"?(resetSent?<div style={{textAlign:"center",padding:"20px 0"}}><Ic n="mail" s={40} c="var(--gold)"/><p style={{marginTop:12,fontWeight:600}}>Email envoyé !</p><p style={{color:"var(--ink4)",fontSize:13,marginTop:6}}>Vérifiez votre boîte mail.</p><button style={{...B.soft({marginTop:16}),display:"inline-flex"}} onClick={()=>{setMode("login");setResetSent(false);}}>Retour</button></div>
         :<><FRow><Lbl>Email</Lbl><input value={form.email} onChange={e=>set("email",e.target.value)} type="email" placeholder="votre@email.com"/></FRow><button style={B.gold({width:"100%",justifyContent:"center",padding:12,marginBottom:12})} onClick={handleSubmit} disabled={loading}>{loading?"Envoi…":"Envoyer le lien"}</button><button style={{background:"none",color:"var(--ink4)",fontSize:13,width:"100%",textAlign:"center" as const,textDecoration:"underline"}} onClick={()=>setMode("login")}>Retour</button></>)
-      :(<>
-        <div style={{display:"flex",gap:0,marginBottom:20,border:"1.5px solid var(--border)",borderRadius:"var(--r-sm)",overflow:"hidden"}}>
-          {[["login","Connexion"],["register","Inscription"]].map(([m,l])=>(<button key={m} onClick={()=>setMode(m as any)} style={{flex:1,padding:"10px",background:mode===m?"var(--red)":"transparent",color:mode===m?"white":"var(--ink4)",border:"none",fontWeight:mode===m?600:400,fontSize:14}}>{l}</button>))}
-        </div>
+      :(<><div style={{display:"flex",gap:0,marginBottom:20,border:"1.5px solid var(--border)",borderRadius:"var(--r-sm)",overflow:"hidden"}}>{[["login","Connexion"],["register","Inscription"]].map(([m,l])=>(<button key={m} onClick={()=>setMode(m as any)} style={{flex:1,padding:"10px",background:mode===m?"var(--red)":"transparent",color:mode===m?"white":"var(--ink4)",border:"none",fontWeight:mode===m?600:400,fontSize:14}}>{l}</button>))}</div>
         {mode==="register"&&<FRow><Lbl>Pseudo</Lbl><input value={form.pseudo} onChange={e=>set("pseudo",e.target.value)} placeholder="Votre pseudo"/></FRow>}
         <FRow><Lbl>Email</Lbl><input value={form.email} onChange={e=>set("email",e.target.value)} type="email" placeholder="votre@email.com"/></FRow>
         <div style={{marginBottom:8}}><Lbl>Mot de passe</Lbl><input value={form.password} onChange={e=>set("password",e.target.value)} type="password" placeholder="••••••••" onKeyDown={e=>e.key==="Enter"&&handleSubmit()}/></div>
         {mode==="login"&&<div style={{textAlign:"right",marginBottom:16}}><button style={{background:"none",color:"var(--ink4)",fontSize:12,textDecoration:"underline"}} onClick={()=>setMode("reset")}>Mot de passe oublié ?</button></div>}
-        <button style={B.primary({width:"100%",justifyContent:"center",padding:13,fontSize:15,borderRadius:"var(--r-md)"})} onClick={handleSubmit} disabled={loading}>{loading?"Chargement…":mode==="login"?"Se connecter":"Créer un compte"}</button>
-      </>)}
+        <button style={B.primary({width:"100%",justifyContent:"center",padding:13,fontSize:15,borderRadius:"var(--r-md)"})} onClick={handleSubmit} disabled={loading}>{loading?"Chargement…":mode==="login"?"Se connecter":"Créer un compte"}</button></>)}
     </div>
   );
 };
@@ -817,13 +748,7 @@ const CommunityPage = ({ currentUser, userProfile, onSelectPlay, onSelectUser }:
         <div style={{maxWidth:760,margin:"0 auto"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
             <h1 className="serif" style={{fontSize:28,color:"white"}}>Communauté</h1>
-            {currentUser&&<div style={{position:"relative"}}>
-              <button style={{...B.soft({padding:"9px 14px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",color:"white",borderRadius:100}),position:"relative"}} onClick={()=>{setShowNotifs(p=>!p);if(!showNotifs)markAllRead();}}><Ic n="bell" s={18} c="white"/>{unreadCount>0&&<span style={{position:"absolute",top:-4,right:-4,width:18,height:18,borderRadius:"50%",background:"var(--gold)",color:"#3D1F00",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unreadCount}</span>}</button>
-              {showNotifs&&<div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-lg)",boxShadow:"var(--shadow-lg)",width:300,maxHeight:320,overflowY:"auto",zIndex:300}}>
-                <div style={{padding:"14px 16px",borderBottom:"1px solid var(--border)",fontWeight:600,fontSize:14}}>Notifications</div>
-                {notifs.length===0?<div style={{padding:"20px 16px",textAlign:"center",color:"var(--ink4)",fontSize:13}}>Aucune notification.</div>:notifs.map((n:any)=><div key={n.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--cream2)",background:n.read?"transparent":"rgba(201,168,76,.06)"}}><p style={{fontSize:13}}><b>{n.fromPseudo}</b> a commenté votre avis</p>{n.text&&<p style={{fontSize:12,color:"var(--ink3)",marginTop:3,fontStyle:"italic"}}>"{n.text}"</p>}</div>)}
-              </div>}
-            </div>}
+            {currentUser&&<div style={{position:"relative"}}><button style={{...B.soft({padding:"9px 14px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",color:"white",borderRadius:100}),position:"relative"}} onClick={()=>{setShowNotifs(p=>!p);if(!showNotifs)markAllRead();}}><Ic n="bell" s={18} c="white"/>{unreadCount>0&&<span style={{position:"absolute",top:-4,right:-4,width:18,height:18,borderRadius:"50%",background:"var(--gold)",color:"#3D1F00",fontSize:11,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>{unreadCount}</span>}</button>{showNotifs&&<div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-lg)",boxShadow:"var(--shadow-lg)",width:300,maxHeight:320,overflowY:"auto",zIndex:300}}><div style={{padding:"14px 16px",borderBottom:"1px solid var(--border)",fontWeight:600,fontSize:14}}>Notifications</div>{notifs.length===0?<div style={{padding:"20px 16px",textAlign:"center",color:"var(--ink4)",fontSize:13}}>Aucune notification.</div>:notifs.map((n:any)=><div key={n.id} style={{padding:"12px 16px",borderBottom:"1px solid var(--cream2)",background:n.read?"transparent":"rgba(201,168,76,.06)"}}><p style={{fontSize:13}}><b>{n.fromPseudo}</b> a commenté votre avis</p>{n.text&&<p style={{fontSize:12,color:"var(--ink3)",marginTop:3,fontStyle:"italic"}}>"{n.text}"</p>}</div>)}</div>}</div>}
           </div>
           <div style={{background:"rgba(0,0,0,.2)",borderRadius:"var(--r-lg)",padding:18}}>
             <p style={{color:"rgba(255,255,255,.7)",fontSize:11,fontWeight:600,letterSpacing:".06em",textTransform:"uppercase" as const,marginBottom:10}}>Rechercher un utilisateur</p>
@@ -836,15 +761,7 @@ const CommunityPage = ({ currentUser, userProfile, onSelectPlay, onSelectUser }:
       <div style={{maxWidth:760,margin:"0 auto",padding:24}}>
         <h2 className="serif" style={{fontSize:18,marginBottom:16}}>Activité récente</h2>
         {!currentUser?<Empty icon="community" text="Connectez-vous pour voir l'activité."/>:loading?<div style={{textAlign:"center",padding:40}}>Chargement…</div>:reviews.length===0?<Empty icon="community" text="Aucune activité." sub="Ajoutez des amis pour voir leurs avis !"/>
-          :<div style={{display:"flex",flexDirection:"column",gap:12}}>
-            {reviews.map((r:any)=>(
-              <Card key={r.id} style={{padding:18}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><div style={{width:34,height:34,borderRadius:"50%",background:"var(--red)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"var(--gold)",cursor:"pointer",flexShrink:0}} onClick={()=>onSelectUser(r.userId)}>{r.userPseudo?.charAt(0)?.toUpperCase()||"?"}</div><div><span style={{fontWeight:600,cursor:"pointer",fontSize:14}} onClick={()=>onSelectUser(r.userId)}>{r.userPseudo}</span><span style={{color:"var(--ink4)",fontSize:13}}> a vu</span></div></div>
-                <div onClick={()=>onSelectPlay(r.playId)} style={{cursor:"pointer",paddingLeft:44,marginBottom:10}}><div className="serif" style={{fontWeight:700,marginBottom:4}}>{r.playTitle}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:6}}>{r.playPlaywright}</div><Stars value={r.rating} onChange={()=>{}} readonly size={14}/>{r.comment&&<p style={{color:"var(--ink2)",fontSize:13,marginTop:5,lineHeight:1.55}}>{r.comment}</p>}</div>
-                <div style={{paddingLeft:44}}><ReviewComments reviewId={r.id} reviewOwnerId={r.userId} currentUser={currentUser} userProfile={userProfile}/></div>
-              </Card>
-            ))}
-          </div>}
+          :<div style={{display:"flex",flexDirection:"column",gap:12}}>{reviews.map((r:any)=>(<Card key={r.id} style={{padding:18}}><div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}><div style={{width:34,height:34,borderRadius:"50%",background:"var(--red)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,fontWeight:700,color:"var(--gold)",cursor:"pointer",flexShrink:0}} onClick={()=>onSelectUser(r.userId)}>{r.userPseudo?.charAt(0)?.toUpperCase()||"?"}</div><div><span style={{fontWeight:600,cursor:"pointer",fontSize:14}} onClick={()=>onSelectUser(r.userId)}>{r.userPseudo}</span><span style={{color:"var(--ink4)",fontSize:13}}> a vu</span></div></div><div onClick={()=>onSelectPlay(r.playId)} style={{cursor:"pointer",paddingLeft:44,marginBottom:10}}><div className="serif" style={{fontWeight:700,marginBottom:4}}>{r.playTitle}</div><div style={{color:"var(--ink4)",fontSize:12,marginBottom:6}}>{r.playPlaywright}</div><Stars value={r.rating} onChange={()=>{}} readonly size={14}/>{r.comment&&<p style={{color:"var(--ink2)",fontSize:13,marginTop:5,lineHeight:1.55}}>{r.comment}</p>}</div><div style={{paddingLeft:44}}><ReviewComments reviewId={r.id} reviewOwnerId={r.userId} currentUser={currentUser} userProfile={userProfile}/></div></Card>))}</div>}
       </div>
     </div>
   );
@@ -853,12 +770,7 @@ const CommunityPage = ({ currentUser, userProfile, onSelectPlay, onSelectUser }:
 const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: any) => {
   const [profile,setProfile]=useState<any>(null);const [reviews,setReviews]=useState<any[]>([]);const [playsMap,setPlaysMap]=useState<any>({});const [friendReqs,setFriendReqs]=useState<any[]>([]);const [editMode,setEditMode]=useState(false);const [showAccountSettings,setShowAccountSettings]=useState(false);const [editForm,setEditForm]=useState<any>({});const [loading,setLoading]=useState(true);const [sortReviews,setSortReviews]=useState("recent");
   const isOwn=!targetUserId||targetUserId===currentUser?.uid;const uid=targetUserId||currentUser?.uid;
-  useEffect(()=>{
-    if(!uid){setLoading(false);return;}
-    const u1=onSnapshot(doc(db,"users",uid),(s:any)=>{if(s.exists()){setProfile(s.data());setEditForm(s.data());}setLoading(false);});
-    const u2=onSnapshot(query(collection(db,"reviews"),where("userId","==",uid),where("status","==","vu"),orderBy("createdAt","desc")),async s=>{const revs=s.docs.map(d=>({id:d.id,...d.data()}));setReviews(revs);const pm:any={};await Promise.all(revs.map(async(r:any)=>{if(!pm[r.playId]){try{const ps=await getDoc(doc(db,"plays",r.playId));if(ps.exists())pm[r.playId]={id:ps.id,...ps.data()};}catch{}}}));setPlaysMap(pm);});
-    return()=>{u1();u2();};
-  },[uid]);
+  useEffect(()=>{if(!uid){setLoading(false);return;}const u1=onSnapshot(doc(db,"users",uid),(s:any)=>{if(s.exists()){setProfile(s.data());setEditForm(s.data());}setLoading(false);});const u2=onSnapshot(query(collection(db,"reviews"),where("userId","==",uid),where("status","==","vu"),orderBy("createdAt","desc")),async s=>{const revs=s.docs.map(d=>({id:d.id,...d.data()}));setReviews(revs);const pm:any={};await Promise.all(revs.map(async(r:any)=>{if(!pm[r.playId]){try{const ps=await getDoc(doc(db,"plays",r.playId));if(ps.exists())pm[r.playId]={id:ps.id,...ps.data()};}catch{}}}));setPlaysMap(pm);});return()=>{u1();u2();};},[uid]);
   useEffect(()=>{if(!isOwn||!currentUser)return;const unsub=onSnapshot(query(collection(db,"friendRequests"),where("to","==",currentUser.uid),where("status","==","pending")),s=>setFriendReqs(s.docs.map(d=>({id:d.id,...d.data()}))));return unsub;},[currentUser,isOwn]);
   if(!currentUser&&!targetUserId)return <AuthPage onSuccess={()=>{}}/>;
   if(loading)return <div style={{display:"flex",alignItems:"center",justifyContent:"center",minHeight:"60vh",color:"var(--ink4)"}}>Chargement…</div>;
@@ -881,10 +793,8 @@ const ProfilePage = ({ currentUser, userProfile, onSelectPlay, targetUserId }: a
               {profile?.bio&&<p style={{color:"rgba(255,255,255,.65)",fontSize:14,marginBottom:10}}>{profile.bio}</p>}
               <div style={{display:"flex",gap:20,fontSize:13,color:"rgba(255,255,255,.6)",marginBottom:14}}><span><b style={{color:"white"}}>{reviews.length}</b> pièces vues</span><span><b style={{color:"white"}}>{profile?.friends?.length||0}</b> amis</span></div>
               <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                {isOwn?<>
-                  <button style={B.soft({fontSize:13,padding:"9px 18px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",color:"white",borderRadius:100})} onClick={()=>setEditMode(true)}><Ic n="edit" s={14} c="white"/>Modifier</button>
-                  <button style={B.soft({fontSize:13,padding:"9px 18px",background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.8)",borderRadius:100})} onClick={()=>setShowAccountSettings(true)}><Ic n="lock" s={14} c="rgba(255,255,255,.8)"/>Compte</button>
-                </>:<button style={B.gold({fontSize:13})} onClick={sendFriendReq}><Ic n="adduser" s={14} c="#3D1F00"/>Ajouter en ami</button>}
+                {isOwn?<><button style={B.soft({fontSize:13,padding:"9px 18px",background:"rgba(255,255,255,.15)",border:"1px solid rgba(255,255,255,.25)",color:"white",borderRadius:100})} onClick={()=>setEditMode(true)}><Ic n="edit" s={14} c="white"/>Modifier</button><button style={B.soft({fontSize:13,padding:"9px 18px",background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.2)",color:"rgba(255,255,255,.8)",borderRadius:100})} onClick={()=>setShowAccountSettings(true)}><Ic n="lock" s={14} c="rgba(255,255,255,.8)"/>Compte</button></>
+                :<button style={B.gold({fontSize:13})} onClick={sendFriendReq}><Ic n="adduser" s={14} c="#3D1F00"/>Ajouter en ami</button>}
               </div>
             </div>
           </div>
@@ -921,12 +831,10 @@ const TopNav = ({ page, setPage, currentUser, userProfile, onLogout }: any) => {
   return(
     <nav className="top-nav" style={{background:"var(--red-deeper)",position:"sticky",top:0,zIndex:200,height:56,alignItems:"center",padding:"0 16px",borderBottom:"1px solid rgba(201,168,76,.3)",width:"100%"}}>
       <div style={{display:"flex",alignItems:"center",gap:8,marginRight:16,cursor:"pointer",flexShrink:0}} onClick={()=>setPage("catalogue")}><LogoMark size={30}/><span className="serif" style={{fontSize:16,color:"var(--gold)",fontWeight:700}}>MyTheatre</span></div>
-      <div style={{display:"flex",gap:2,flex:1}}>{tabs.map(tab=>(<button key={tab.id} onClick={()=>setPage(tab.id)} style={{width:40,height:40,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:page===tab.id?"rgba(201,168,76,.18)":"transparent",border:`1.5px solid ${page===tab.id?"rgba(201,168,76,.5)":"transparent"}`,color:page===tab.id?"var(--gold)":"rgba(255,255,255,.55)",transition:"all .18s"}}><Ic n={tab.icon} s={18} c={page===tab.id?"var(--gold)":"rgba(255,255,255,.55)"}/></button>))}</div>
+      <div style={{display:"flex",gap:2,flex:1}}>{tabs.map(tab=>(<button key={tab.id} onClick={()=>setPage(tab.id)} style={{width:40,height:40,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",background:page===tab.id?"rgba(201,168,76,.18)":"transparent",border:`1.5px solid ${page===tab.id?"rgba(201,168,76,.5)":"transparent"}`,transition:"all .18s"}}><Ic n={tab.icon} s={18} c={page===tab.id?"var(--gold)":"rgba(255,255,255,.55)"}/></button>))}</div>
       <div ref={ref} style={{position:"relative",flexShrink:0}}>
-        {currentUser?(<>
-          <div style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",padding:"5px 10px",borderRadius:100,border:"1px solid rgba(201,168,76,.35)"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.borderColor="var(--gold)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.borderColor="rgba(201,168,76,.35)"} onClick={()=>setOpen(p=>!p)}><Avatar user={userProfile||currentUser} size={26}/><span style={{fontSize:13,color:"var(--cream)",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{userProfile?.pseudo||currentUser.displayName}</span><Ic n="chevron" s={14} c="var(--gold)"/></div>
-          {open&&<div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-lg)",overflow:"hidden",minWidth:170,boxShadow:"var(--shadow-lg)",zIndex:300}}><button style={{display:"flex",width:"100%",padding:"13px 16px",background:"transparent",color:"var(--ink)",fontSize:14,border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer",alignItems:"center",gap:10}} onClick={()=>{setPage("profil");setOpen(false);}}><Ic n="profile" s={15} c="var(--ink3)"/>Mon profil</button><button style={{display:"flex",width:"100%",padding:"13px 16px",background:"transparent",color:"var(--red)",fontSize:14,border:"none",cursor:"pointer",alignItems:"center",gap:10}} onClick={()=>{onLogout();setOpen(false);}}><Ic n="logout" s={15} c="var(--red)"/>Déconnexion</button></div>}
-        </>):<button style={B.gold({fontSize:13,padding:"8px 16px"})} onClick={()=>setPage("profil")}>Connexion</button>}
+        {currentUser?(<><div style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer",padding:"5px 10px",borderRadius:100,border:"1px solid rgba(201,168,76,.35)"}} onMouseEnter={e=>(e.currentTarget as HTMLElement).style.borderColor="var(--gold)"} onMouseLeave={e=>(e.currentTarget as HTMLElement).style.borderColor="rgba(201,168,76,.35)"} onClick={()=>setOpen(p=>!p)}><Avatar user={userProfile||currentUser} size={26}/><span style={{fontSize:13,color:"var(--cream)",maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{userProfile?.pseudo||currentUser.displayName}</span><Ic n="chevron" s={14} c="var(--gold)"/></div>{open&&<div style={{position:"absolute",right:0,top:"calc(100% + 8px)",background:"var(--white)",border:"1px solid var(--border)",borderRadius:"var(--r-lg)",overflow:"hidden",minWidth:170,boxShadow:"var(--shadow-lg)",zIndex:300}}><button style={{display:"flex",width:"100%",padding:"13px 16px",background:"transparent",color:"var(--ink)",fontSize:14,border:"none",borderBottom:"1px solid var(--border)",cursor:"pointer",alignItems:"center",gap:10}} onClick={()=>{setPage("profil");setOpen(false);}}><Ic n="profile" s={15} c="var(--ink3)"/>Mon profil</button><button style={{display:"flex",width:"100%",padding:"13px 16px",background:"transparent",color:"var(--red)",fontSize:14,border:"none",cursor:"pointer",alignItems:"center",gap:10}} onClick={()=>{onLogout();setOpen(false);}}><Ic n="logout" s={15} c="var(--red)"/>Déconnexion</button></div>}</>)
+        :<button style={B.gold({fontSize:13,padding:"8px 16px"})} onClick={()=>setPage("profil")}>Connexion</button>}
       </div>
     </nav>
   );
@@ -949,21 +857,8 @@ const BottomNav = ({ page, setPage, currentUser, userProfile }: any) => {
 
 export default function App() {
   const [page,setPage]=useState("catalogue");const [currentUser,setCurrentUser]=useState<any>(null);const [userProfile,setUserProfile]=useState<any>(null);const [userReviews,setUserReviews]=useState<any[]>([]);const [selectedPlayId,setSelectedPlayId]=useState<string|null>(null);const [selectedUserId,setSelectedUserId]=useState<string|null>(null);const [authLoading,setAuthLoading]=useState(true);
-  useEffect(()=>{
-    const unsub=onAuthStateChanged(auth,async(user:any)=>{
-      setCurrentUser(user);
-      if(user){const snap=await getDoc(doc(db,"users",user.uid));if(snap.exists())setUserProfile(snap.data());else{const p={pseudo:user.displayName||"Spectateur",email:user.email,photoURL:"",bio:"",friends:[],createdAt:serverTimestamp()};await setDoc(doc(db,"users",user.uid),p);setUserProfile(p);}}
-      else setUserProfile(null);
-      setAuthLoading(false);
-    });
-    return unsub;
-  },[]);
-  useEffect(()=>{
-    if(!currentUser)return;
-    const u1=onSnapshot(doc(db,"users",currentUser.uid),(snap:any)=>{if(snap.exists())setUserProfile(snap.data());});
-    const u2=onSnapshot(query(collection(db,"reviews"),where("userId","==",currentUser.uid)),snap=>setUserReviews(snap.docs.map(d=>({id:d.id,...d.data()}))));
-    return()=>{u1();u2();};
-  },[currentUser]);
+  useEffect(()=>{const unsub=onAuthStateChanged(auth,async(user:any)=>{setCurrentUser(user);if(user){const snap=await getDoc(doc(db,"users",user.uid));if(snap.exists())setUserProfile(snap.data());else{const p={pseudo:user.displayName||"Spectateur",email:user.email,photoURL:"",bio:"",friends:[],createdAt:serverTimestamp()};await setDoc(doc(db,"users",user.uid),p);setUserProfile(p);}}else setUserProfile(null);setAuthLoading(false);});return unsub;},[]);
+  useEffect(()=>{if(!currentUser)return;const u1=onSnapshot(doc(db,"users",currentUser.uid),(snap:any)=>{if(snap.exists())setUserProfile(snap.data());});const u2=onSnapshot(query(collection(db,"reviews"),where("userId","==",currentUser.uid)),snap=>setUserReviews(snap.docs.map(d=>({id:d.id,...d.data()}))));return()=>{u1();u2();};},[currentUser]);
   const selectPlay=(id:string)=>{setSelectedPlayId(id);setSelectedUserId(null);window.scrollTo(0,0);};
   const selectUser=(id:string)=>{setSelectedUserId(id);setSelectedPlayId(null);setPage("profil");window.scrollTo(0,0);};
   const logout=async()=>{await signOut(auth);setPage("catalogue");setSelectedPlayId(null);setSelectedUserId(null);setUserProfile(null);toast("À bientôt !","info");};
